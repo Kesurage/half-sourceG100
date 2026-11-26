@@ -27,24 +27,32 @@ jobs:
           yes | "$SDKM" --licenses >/dev/null 2>&1 || true
           "$SDKM" "platforms;android-34" "build-tools;34.0.0" "ndk;27.3.13750724" >/dev/null
 
-      - name: Build tier2 JNI library
-        run: bash scripts/build-jni.sh
+      - name: Build tier2 JNI libraries (aarch64 + armv7a)
+        run: bash scripts/build-jni.sh all
 
-      - name: Build launcher APK
+      - name: Build launcher-only APK
         run: bash scripts/make-launcher-apk.sh
+
+      - name: Build merged engine APK (ONE APK: manager + engine)
+        run: bash scripts/make-launcher-apk.sh --with-engine
 
       - uses: actions/upload-artifact@v4
         with:
           name: HalfSourceLauncher
-          path: dist/*.apk
+          path: dist/HalfSourceLauncher-*.apk
 
-      - name: Create release with APK (idempotent)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HalfSourceG100Engine
+          path: dist/HalfSourceG100-Engine-*.apk
+
+      - name: Create release with APKs (idempotent)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.apk \
             --title "half-sourceG100 $GITHUB_REF_NAME" \
-            --notes "Launcher build. Install guide: docs/launcher.md" \
+            --notes "Build of $GITHUB_REF_NAME. HalfSourceG100-Engine-*.apk = the full app (mod manager + engine, ONE APK). Install guide: docs/launcher.md, engine details: docs/ENGINE-PACK.md" \
           || gh release upload "$GITHUB_REF_NAME" dist/*.apk --clobber \
           || true

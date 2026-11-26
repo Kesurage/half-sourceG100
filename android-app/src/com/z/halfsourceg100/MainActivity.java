@@ -19,7 +19,7 @@ import java.io.File;
 import java.util.List;
 
 /**
- * Phase 3 launcher home — the mod catalog (roadmap Phase 3, item 1).
+ * The launcher IS the engine app — one APK (docs/ENGINE-PACK.md).
  *
  * Two sections, one engine (docs/mount-architecture.md):
  *   TC MODS       srceng/<tc>/            tap to select, launched via -game
@@ -32,7 +32,6 @@ import java.util.List;
  */
 public class MainActivity extends Activity implements ModAdapter.State {
 
-    static final String DEFAULT_ENGINE_PKG = "com.valvesoftware.source"; // nillerusr engine
     static final String REPO_URL = "https://github.com/Kesurage/half-sourceG100";
 
     private static final int REQ_IMPORT_ZIP = 11;
@@ -160,14 +159,19 @@ public class MainActivity extends Activity implements ModAdapter.State {
         s.append("\nHL2 base content: ")
                 .append(scan.hl2Present ? "present" : "MISSING (put your hl2/ copy here)");
         s.append("\nTier2 classifier: ")
-                .append(Tier2Jni.available() ? safeVersion() : "unavailable");
-        s.append("\nEngine bundle: ")
-                .append(EngineJni.available() ? "bundled" : "not bundled in this build");
-        s.append("\nExternal engine: ")
-                .append(externalEngineInstalled() ? enginePkg() + " (installed)"
-                        : enginePkg() + " (not installed)");
+                .append(Tier2Jni.available() ? safeVersion() : "unavailable (raw listing)");
+        s.append("\nEngine: ").append(engineStatusLine());
         status.setText(s.toString());
         updateLaunchText();
+    }
+
+    private String engineStatusLine() {
+        if (!EngineHost.bundled(this))
+            return "not bundled in this build (launcher-only) — get the engine build from Releases";
+        if (!EngineHost.deviceAbiOk())
+            return "bundled, but this device has no 32-bit app support (armeabi-v7a required)";
+        return "bundled (old-port GLES2) \u00b7 armeabi-v7a \u00b7 "
+                + (EngineHost.sdlPresent() ? "SDL glue ok" : "SDL glue MISSING");
     }
 
     private String safeVersion() {
@@ -176,19 +180,6 @@ public class MainActivity extends Activity implements ModAdapter.State {
             return v == null ? "loaded" : v;
         } catch (Throwable t) {
             return "loaded";
-        }
-    }
-
-    String enginePkg() {
-        return getSharedPreferences("hsg100", MODE_PRIVATE)
-                .getString("engine_pkg", DEFAULT_ENGINE_PKG);
-    }
-
-    boolean externalEngineInstalled() {
-        try {
-            return getPackageManager().getLaunchIntentForPackage(enginePkg()) != null;
-        } catch (Exception e) {
-            return false;
         }
     }
 
@@ -335,31 +326,43 @@ public class MainActivity extends Activity implements ModAdapter.State {
                 return;
             }
         }
-        if (EngineJni.available()) {
-            Intent it = new Intent(this, EngineActivity.class);
-            it.putExtra("game", activeTc.isEmpty() ? "hl2" : activeTc);
-            startActivity(it);
-        } else if (externalEngineInstalled()) {
-            Intent it = getPackageManager().getLaunchIntentForPackage(enginePkg());
-            if (it != null) {
-                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(it);
-            }
-            toast("Opened the external engine — pick "
-                    + (activeTc.isEmpty() ? "hl2" : activeTc)
-                    + " there (it reads the same " + ModScanner.ROOT + " root)");
-        } else {
+        if (!EngineHost.bundled(this) || !EngineHost.sdlPresent()) {
             new AlertDialog.Builder(this)
-                    .setTitle("No engine yet")
-                    .setMessage("This build is the mod manager (launcher shell). The engine "
-                            + "bundle ships as its own release once the Phase-0 engine build "
-                            + "lands.\n\nMeanwhile, the nillerusr engine app ("
-                            + DEFAULT_ENGINE_PKG + ") reads the same " + ModScanner.ROOT
-                            + " root if you install it.")
+                    .setTitle("No engine in this build")
+                    .setMessage("This APK is the launcher-only build. Install the engine build "
+                            + "(HalfSourceG100-Engine-*.apk) from Releases — same app, "
+                            + "engine .so set included.")
                     .setPositiveButton("Open releases", (d, w) -> openUrl(REPO_URL + "/releases"))
                     .setNegativeButton("Close", null)
                     .show();
+            return;
         }
+        if (!EngineHost.deviceAbiOk()) {
+            toast("This device does not support 32-bit apps (armeabi-v7a) — engine cannot run");
+            return;
+        }
+
+        // voice (mic) is optional; ask quietly, the game starts regardless
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            try {
+                requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 7);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        EngineHost.launch(this, activeTc, lineageOf(activeTc));
+    }
+
+    /** Base-game lineage of the active TC (fallback engine game index). */
+    private String lineageOf(String tcDir) {
+        if (tcDir == null || tcDir.isEmpty() || scan == null || scan.tcs == null) return "hl2";
+        for (ModScanner.Entry e : scan.tcs)
+            if (e.dirName.equals(tcDir)) {
+                String g = e.info.game;
+                return (g == null || g.isEmpty()) ? "hl2" : g;
+            }
+        return "hl2";
     }
 
     void openUrl(String u) {

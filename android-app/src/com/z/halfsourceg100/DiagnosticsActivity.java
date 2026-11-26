@@ -48,18 +48,14 @@ public class DiagnosticsActivity extends Activity {
         }
         s.append("Tier2 classifier: ")
                 .append(Tier2Jni.available() ? safeTier2Version() : "unavailable").append('\n');
-        s.append("Engine bundle: ")
-                .append(EngineJni.available() ? "bundled" : "not bundled (launcher-only build)")
+        s.append("Engine: ")
+                .append(EngineHost.bundled(this) ? "bundled (old-port GLES2, armeabi-v7a)"
+                        : "not bundled (launcher-only build)").append('\n');
+        s.append("32-bit app support (engine requirement): ")
+                .append(EngineHost.deviceAbiOk() ? "yes" : "NO — engine cannot run")
                 .append('\n');
-        String ep = getSharedPreferences("hsg100", MODE_PRIVATE)
-                .getString("engine_pkg", MainActivity.DEFAULT_ENGINE_PKG);
-        boolean ext = false;
-        try {
-            ext = getPackageManager().getLaunchIntentForPackage(ep) != null;
-        } catch (Exception ignored) {
-        }
-        s.append("External engine (").append(ep).append("): ")
-                .append(ext ? "installed" : "not installed").append("\n\n");
+        s.append("SDL glue: ")
+                .append(EngineHost.sdlPresent() ? "present" : "missing").append("\n\n");
 
         s.append("== Device ==\n");
         s.append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n');
@@ -107,10 +103,10 @@ public class DiagnosticsActivity extends Activity {
         s.append('\n');
 
         s.append("== Renderer plan ==\n");
-        s.append("Shipping renderer: GLES (togles) tuned for Mali-G57.\n");
-        s.append("Phase 4 experiment: Vulkan via panvk on the stock kbase\n");
-        s.append("kernel (no root) - additive, never blocking mod compat.\n");
-        s.append("BCn textures (DXT) transcode to ASTC at import on this GPU.\n\n");
+        s.append("Shipping renderer: GLES2 (bundled old-port, Regal).\n");
+        s.append("Phase 3 target: Vulkan via panvk on the stock kbase\n");
+        s.append("kernel (no root) - see docs/PHASE3-VULKAN.md.\n");
+        s.append("Native resolution always.\n\n");
 
         s.append("== Storage ==\n");
         s.append("All-files access: ").append(android.os.Environment

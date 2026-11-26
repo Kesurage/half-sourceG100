@@ -16,13 +16,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Launcher setup: content root info, external engine package, bulk actions
- * (restore original gameinfos, disable all regular mods), and the project
- * identity text.
+ * Launcher setup: content root info, engine launch tuning (argv / env), bulk
+ * actions (restore original gameinfos, disable all regular mods), and the
+ * project identity text.
  */
 public class SettingsActivity extends Activity {
 
-    private EditText enginePkg;
+    private EditText extraArgs, engineEnv;
     private SharedPreferences prefs;
 
     @Override
@@ -35,17 +35,23 @@ public class SettingsActivity extends Activity {
                 .getString("active_tc", "");
 
         ((TextView) findViewById(R.id.root)).setText(ModScanner.ROOT
-                + "\n(same root the nillerusr engine and GDroid use — shared storage)");
+                + "\n(same root the bundled engine mounts — shared storage)");
         ((TextView) findViewById(R.id.active_tc)).setText(
                 activeTc == null || activeTc.isEmpty()
                         ? "none — vanilla Half-Life 2" : activeTc + "  (-game " + activeTc + ")");
 
-        enginePkg = findViewById(R.id.engine_pkg);
-        enginePkg.setText(prefs.getString("engine_pkg", MainActivity.DEFAULT_ENGINE_PKG));
+        extraArgs = findViewById(R.id.extra_args);
+        extraArgs.setText(prefs.getString("extra_args", "-console"));
+
+        engineEnv = findViewById(R.id.engine_env);
+        engineEnv.setText(prefs.getString("engine_env", "LIBGL_USEVBO=0"));
 
         Button save = findViewById(R.id.save);
         save.setOnClickListener(v -> {
-            prefs.edit().putString("engine_pkg", enginePkg.getText().toString().trim()).apply();
+            prefs.edit()
+                    .putString("extra_args", extraArgs.getText().toString().trim())
+                    .putString("engine_env", engineEnv.getText().toString().trim())
+                    .apply();
             Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
             finish();
         });

@@ -44,17 +44,35 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="External engine package"
+            android:text="Engine launch arguments"
             android:textSize="13sp"
             android:textStyle="bold"
             android:textColor="@color/accent" />
 
         <EditText
-            android:id="@+id/engine_pkg"
+            android:id="@+id/extra_args"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="12sp"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:hint="-console" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Engine environment (KEY=VALUE)"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent" />
+
+        <EditText
+            android:id="@+id/engine_env"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:hint="LIBGL_USEVBO=0" />
 
         <Button
             android:id="@+id/save"

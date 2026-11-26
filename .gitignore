@@ -10,3 +10,6 @@ tools/__pycache__/
 dist/
 android-app/build/
 android-app/libs/
+
+# pinned engine pack cache (fetched at build time, never committed)
+engine-pack/
