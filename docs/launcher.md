@@ -1,18 +1,25 @@
 # Launcher guide (Phase 3)
 
-The launcher APK is the front half of the one-engine architecture: it manages
-`/sdcard/srceng`, classifies every mod with the same tier2 library the engine
-uses, converts PC mod zips on-device, and starts the game (our engine bundle
-when it ships, or the nillerusr engine app which reads the same root).
+As of v0.4.0 the launcher and the engine are **ONE APK**: install
+`HalfSourceG100-Engine-<version>.apk` and the mod manager starts the game
+itself — no separate engine app (details: docs/ENGINE-PACK.md). The
+manager-only build (`HalfSourceLauncher-*.apk`) exists for catalog-only use
+and tells you to switch to the engine build when you tap LAUNCH.
 
 ## Install
 
-1. Grab `HalfSourceLauncher-<version>.apk` from
+1. Grab `HalfSourceG100-Engine-<version>.apk` from
    [releases](https://github.com/Kesurage/half-sourceG100/releases) and install
-   it (allow "install unknown apps" for your browser/file manager).
+   it (allow "install unknown apps" for your browser/file manager). The device
+   needs 32-bit app support (armeabi-v7a) — the Helio G100 has it; the app
+   checks and reports if not.
 2. Open the app once and **grant All files access** when prompted (the content
    root is shared storage — required on Android 11+; the Hot 50 4G runs
    Android 14).
+3. Copy your Half-Life 2 `hl2` folder (from your own Steam install) to
+   `/sdcard/srceng/hl2` — it must contain `gameinfo.txt`.
+4. Tap **LAUNCH Half-Life 2**. First launch extracts the engine's touch UI
+   and starts the game in immersive landscape at native resolution.
 
 ## Content layout (the contract)
 
