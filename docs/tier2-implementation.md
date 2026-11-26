@@ -44,11 +44,12 @@ python3 tests/test_tc_extractor.py   # Python suite — expects 14/14 OK
 
 - KEEP: content dirs (`maps materials models sound resource scripts particles cfg media scenes expressions hl2 platform actions save`), VPKs (signature-validated), `gameinfo.txt` (as `.orig`)
 - STRIP: `*.exe`/`*.dll`/`bin/`, redists (`directx`, `vc_redist`, …), installers, launchers
-- FIX: new `gameinfo.txt` — `SteamAppId` re-parented to 220 (HL2), mod content mounted with highest priority, base HL2 + platform appended last (the anti-texture-error fallback)
+- FIX: new `gameinfo.txt` — `SteamAppId` re-parented to 220 (HL2), mod content mounted with highest priority, base HL2 + platform appended last (the anti-texture-error fallback). Rev 3: only engine-valid search-path tokens, VPKs listed explicitly without the `_dir` suffix, numbered chunks never listed, earlier rows win (2013 branch)
 - REPORT: `manifest.json` (class, kept/stripped lists, VPK versions, warnings) so conversions are reproducible and shareable
 
 ## Notable implementation details
 
 - VPK entry layout (VDC): `crc u32 | preload u16 | archiveIndex u16 | offset u32 | length u32 | terminator u16 | preload[]`; v2 adds a 12-byte extended header before the tree.
 - KeyValues parser accepts quoted strings with `\"`/`\\` escapes, bare tokens, `//` and `/* */` comments; unbalanced braces are a parse error (that's how `BROKEN_GAMEINFO` is detected).
+- Mount planner rev 3 emits only tokens the engine expands (`|gameinfo_path|`, `|all_source_engine_paths|`). Rev 2's `|moddir|`/`|hl2|`/`|platform|` forms are literal directory names to the engine and mounted NOTHING — regression-tested in `tier2/tests/test_tier2.cpp` and `tests/test_tc_extractor.py`.
 - The classifier's game-dir discovery: `gameinfo.txt` at root or exactly one level below — matches how TC installers lay out releases.

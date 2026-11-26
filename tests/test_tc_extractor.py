@@ -171,8 +171,10 @@ class TestExtract(unittest.TestCase):
         with open(os.path.join(dest, "gameinfo.txt")) as f:
             gi = f.read()
         self.assertIn('"220"', gi)              # re-parented to HL2
-        self.assertIn("|MyTC|", gi)             # mod mounted first
-        self.assertIn("|hl2|", gi)              # base fallback
+        self.assertIn("|gameinfo_path|.", gi)   # mod mounted first (valid token)
+        self.assertIn("|all_source_engine_paths|hl2", gi)  # base fallback
+        self.assertNotIn("|MyTC|", gi)          # rev 3: no fake |moddir| tokens
+        self.assertNotIn("|hl2|", gi)
         # manifest exists and is valid JSON
         with open(os.path.join(dest, "manifest.json")) as f:
             man = json.load(f)
@@ -261,11 +263,25 @@ class TestMountMode(unittest.TestCase):
 
 
 class TestGameinfoGen(unittest.TestCase):
+    """Rev 3 contract: engine-valid tokens, explicit VPK mounts, priority order."""
+
     def test_priority_order(self):
         gi = tc.generate_gameinfo("mymod", "My Mod")
-        self.assertLess(gi.index("|mymod|"), gi.index("|hl2|"))
-        self.assertIn('|hl2|hl2_textures_dir.vpk', gi)
+        self.assertIn("|gameinfo_path|.", gi)
+        self.assertLess(gi.index("|gameinfo_path|."),
+                        gi.index("|all_source_engine_paths|hl2"))
+        self.assertIn("hl2/hl2_textures.vpk", gi)   # no _dir suffix in mounts
         self.assertIn('"220"', gi)
+        self.assertNotIn("|mymod|", gi)              # engine expands only
+        self.assertNotIn("|hl2|", gi)                # |gameinfo_path| and
+        self.assertNotIn("*_dir.vpk", gi)            # |all_source_engine_paths|
+
+    def test_vpk_mount_names(self):
+        gi = tc.generate_gameinfo("m", "T",
+                                  vpks=["m_dir.vpk", "m.001.vpk", "solo.vpk"])
+        self.assertIn("|gameinfo_path|m.vpk", gi)    # _dir stripped
+        self.assertIn("|gameinfo_path|solo.vpk", gi)  # single-file vpk kept
+        self.assertNotIn("001.vpk", gi)              # chunks load via _dir
 
 
 if __name__ == "__main__":

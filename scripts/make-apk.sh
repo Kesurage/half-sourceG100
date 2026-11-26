@@ -30,9 +30,10 @@ cp -v "$SO_SRC"/*.so "$STAGE/lib/arm64-v8a/" 2>/dev/null || cp -v "$SO_SRC"/aarc
 
 # ---- 2. game content goes to assets as a zip (extracted to filesDir on first run) ----
 # Assets are limited to 2GB total and each entry <500MB (AGL); large VPKs exceed this,
-# so for Phase 0 we instead document sideloading: content lives in
-#   /sdcard/Android/data/com.z.halfsourceg100/files/srceng/
-# and this step is a no-op unless the dir holds a small test set.
+# so content is sideloaded to the shared-storage root instead:
+#   /sdcard/srceng/
+# (the dual-root tree from docs/mount-architecture.md; same root the
+# nillerusr engine and GDroid use)
 if [ -d "$CONTENT/hl2" ]; then
   echo "NOTE: content will be read from app external files dir; skipping asset packing"
 fi
@@ -71,4 +72,5 @@ echo ""
 echo "Built: $OUT"
 echo "Install: adb install -r $OUT"
 echo "Then push HL2 content to:"
-echo "  /sdcard/Android/data/com.z.halfsourceg100/files/srceng/{hl2,platform,sourceengine}"
+echo "  /sdcard/srceng/{hl2,platform,sourceengine}"
+echo "(shared storage — see docs/mount-architecture.md)"

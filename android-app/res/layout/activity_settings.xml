@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Content root"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent" />
+
+        <TextView
+            android:id="@+id/root"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="@color/text_dim" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Active TC"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent" />
+
+        <TextView
+            android:id="@+id/active_tc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="@color/text_dim" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="External engine package"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent" />
+
+        <EditText
+            android:id="@+id/engine_pkg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:singleLine="true" />
+
+        <Button
+            android:id="@+id/save"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Save" />
+
+        <Button
+            android:id="@+id/restore_gi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Restore original gameinfo.txt files (undo Tier-2 rewrites)"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/disable_all"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Disable all regular mods"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="About"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="@color/text_dim"
+            android:lineSpacingExtra="2dp"
+            android:text="half-sourceG100 is the Source Engine running natively on Android — not a Winlator/Wine fork. The engine and mod code compile as native ARM64; a translation layer only ever appears as the Tier-3 last resort for closed Windows DLL mods.\n\nNative resolution, always: the game renders at the panel's native resolution; performance work targets engine and asset cost, never pixel count.\n\nMod compatibility tiers:\n· Tier 1 — native ARM64 mod builds (mods with source code)\n· Tier 2 — content mount (maps, models, materials, sound; base HL2 code as fallback)\n· Tier 3 — translation fallback for closed DLLs (last resort)\n\nTarget device: Infinix Hot 50 4G (Helio G100, Mali-G57 MC2, Android 14)." />
+    </LinearLayout>
+</ScrollView>

@@ -27,8 +27,9 @@ For a standalone TC release (exe-installer-style distribution):
 KEEP:   *.vpk, maps/, materials/, models/, sound/, resource/, scripts/, particles/,
         cfg/, bin/Linux or bin/Android if present
 STRIP:  *.exe, bin/*.dll, DirectX/ redists, launcher data, autorun, docs (optional)
-FIX:    gameinfo.txt → rewrite SteamAppId to HL2 (220), prepend engine search paths,
-        remove Windows-only fs paths
+FIX:    gameinfo.txt → rewrite SteamAppId to HL2 (220), regenerate SearchPaths with
+        engine-valid tokens only (|gameinfo_path|, |all_source_engine_paths|; mod
+        content first, base HL2 + platform last), remove Windows-only fs paths
 MOUNT:  repack KEEP set as VPK (or loose folder mount) + generated gameinfo
 ```
 

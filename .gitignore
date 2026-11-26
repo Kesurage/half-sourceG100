@@ -4,3 +4,9 @@ tier2/*.o
 tier2/*.a
 tier2/test_tier2
 __pycache__/
+tools/__pycache__/
+
+# android build artifacts
+dist/
+android-app/build/
+android-app/libs/

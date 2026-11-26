@@ -1,28 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- half-sourceG100 Phase 0 shell -->
+<!-- half-sourceG100 — Phase 3 launcher (engine-as-launcher APK shell).
+     One APK: mod catalog now, engine bundle in a later release. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.z.halfsourceg100"
-    android:versionCode="1"
-    android:versionName="0.1.0">
+    android:versionCode="3"
+    android:versionName="0.3.0">
 
-    <!-- GLES 3.0: minimum for the togles renderer; native resolution, no scaling -->
-    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
-    <uses-feature android:touchscreen android:required="true" />
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- The engine surface needs GLES3; the catalog itself does not (manager
+         installs anywhere, engine availability is checked at launch). -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="true" />
+
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- Android 11+: the content root /sdcard/srceng is shared storage -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
-        android:label="half-sourceG100"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:extractNativeLibs="true"
+        android:requestLegacyExternalStorage="true"
         android:theme="@style/AppTheme">
 
+        <!-- launcher home: mod catalog, two sections (TC / regular) -->
         <activity
             android:name=".MainActivity"
-            android:label="half-sourceG100"
-            android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:label="@string/app_name"
             android:launchMode="singleTask"
             android:exported="true">
             <intent-filter>
@@ -30,5 +37,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- engine surface: landscape, immersive, native resolution -->
+        <activity
+            android:name=".EngineActivity"
+            android:label="@string/app_name"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:launchMode="singleTask"
+            android:exported="false" />
+
+        <activity android:name=".DiagnosticsActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
     </application>
 </manifest>

@@ -17,15 +17,23 @@ content** over HL2 — no gamedir change, no code change is possible, base HL2
 client/server code always runs. Different mechanism, different failure modes,
 so the launcher presents two sections and the engine has two mount paths.
 
-## On-device layout (scoped storage: app-private dir, or SAF-picked root)
+## On-device layout
+
+The content root is **`/sdcard/srceng`** (shared storage) — the same root every
+prior art uses (nillerusr's engine defaults its gamepath to `/sdcard/srceng`;
+GDroid's tree sits there too). The launcher holds `MANAGE_EXTERNAL_STORAGE`
+("All files access") on Android 11+ and `requestLegacyExternalStorage` below
+that. App-private dirs are only for caches, never for game content — an
+app-private `Android/data` path is unreadable by file managers on Android 13+,
+which would make sideloading impossible.
 
 ```
 srceng/
 ├── hl2/                      base HL2 content (user supplies legally)
 │   ├── custom/               ← regular mods live HERE (engine auto-scan)
 │   │   ├── <addon>/          extracted content-only mod (dirs or loose vpk)
-│   │   ├── <addon>.vpk       or a single vpk dropped in
-│   │   └── disabled/         launcher-managed: moved here to turn off
+│   │   └── <addon>.vpk       or a single vpk dropped in
+│   ├── custom_disabled/      launcher-managed: mods moved here to turn off
 │   ├── save/                 base-game saves
 │   └── ...
 ├── platform/
@@ -36,6 +44,12 @@ srceng/
 │   └── save/
 └── sourceengine/             our engine .so set (engine code, never content)
 ```
+
+Disabled regular mods move to a **sibling** directory (`hl2/custom_disabled/`),
+not a subfolder of `custom/`: the engine's custom-folder scan mounts every
+first-level entry of `custom/`, so a `custom/disabled/` folder would itself be
+mounted as a (useless) search path. A sibling is invisible to the scan — a
+true off switch.
 
 GDroid's layout (`srceng/garrysmod/...`) maps 1:1 onto this with `garrysmod`
 replaced by `hl2` + TC dirs. Naming `srceng` is kept for parity with every
@@ -57,6 +71,27 @@ nillerusr's engine comes from already contains the TF2-era custom-folder
 machinery upstream; confirm it survived the port, otherwise re-add
 (~50 lines: enumerate dirs + MountVPK per `_dir.vpk`).
 
+### Search-path tokens (engine truth, rev 3)
+
+The engine expands exactly two tokens (Valve Developer Community, gameinfo.txt):
+
+| Token | Expands to |
+|---|---|
+| `\|gameinfo_path\|` | the directory containing the gameinfo.txt |
+| `\|all_source_engine_paths\|` | the base directories (srceng root) |
+
+Anything else inside `|...|` is used as a literal directory name and silently
+mounts nothing — this is exactly the rev-2 bug (rev 2 emitted `|moddir|`,
+`|hl2|`, `|platform|`; fixed in rev 3 of the mount planner + tc_extractor,
+regression-tested in both suites). Other rules the planner enforces:
+
+- **VPK entries are listed without the `_dir` suffix** (`Game .../hl2_textures.vpk`
+  mounts `hl2_textures_dir.vpk`); numbered chunk archives are never listed
+  (they load through their `_dir` entry).
+- **No wildcards** — gameinfo has no glob support; every VPK is an explicit line.
+- **Priority (Source 2013 SP/MP branch): earlier rows win.** Emission order is
+  always: mod dir → mod VPKs → `hl2` → base VPKs → `platform`.
+
 ## Launcher mod catalog
 
 Two sections, one engine:
@@ -66,7 +101,7 @@ Two sections, one engine:
 | Scan | `srceng/*/` containing `gameinfo.txt` (excl. `hl2`, `platform`) | `srceng/hl2/custom/` |
 | Launch | `-game <dir>` | `-game hl2` |
 | Class shown | from tier2 classifier | from tier2 classifier |
-| Enable/disable | launcher list selection | move into/out of `custom/disabled/` (v1; v2: `addons.json` manifest) |
+| Enable/disable | launcher list selection | move into/out of `custom_disabled/` (sibling of `custom/` — see layout note; v2: `addons.json` manifest) |
 | Saves | `<tc>/save/` | `hl2/save/` |
 
 Per-entry metadata: title (gameinfo `game`/`title`), class badge, icon
@@ -82,13 +117,13 @@ conversions.
 | PC release says | We store/emit |
 |---|---|
 | `C:\Program Files\Steam\...\hl2` | dropped (line removed) |
-| `\|all_source_engine_paths\|hl2` | `\|hl2\|` |
-| `\|all_source_engine_paths\|platform` | `\|platform\|` |
-| `\|gameinfo_path\|.` | the mod's own dir |
-| `../hl2`, `..\hl2` | `\|hl2\|` |
+| `\|all_source_engine_paths\|hl2` | kept as-is (valid token) + relative `Game hl2` |
+| `\|all_source_engine_paths\|platform` | kept as-is (valid token) |
+| `\|gameinfo_path\|.` | kept as-is — the mod's own dir, highest priority |
+| `../hl2`, `..\hl2` | `Game hl2` + `\|all_source_engine_paths\|hl2` |
 | `SteamAppId 215/218/420/...` | `220` (we ARE HL2) |
 | `bin/*.dll` | stripped (Tier 3 / Tier 1 rebuild path instead) |
-| `_dir.vpk` + numbered chunks | mounted via the `_dir.vpk` entry |
+| `<mod>_dir.vpk` + numbered chunks | one `Game \|gameinfo_path\|<mod>.vpk` line (no `_dir`, chunks implicit) |
 
 Regular mods **never** get a generated gameinfo — they are pure content under
 `custom/` (Valve custom semantics: dirs/vpks only). Only TCs get a generated

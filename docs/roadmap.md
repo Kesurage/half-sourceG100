@@ -30,7 +30,7 @@ Gate: stable 25–30 fps in playable maps, no crashes across d1_ chapters.
 
 The core differentiator. See `mod-compatibility-pipeline.md` for the spec.
 
-**Status: in progress — items 1–3 implemented and tested (see `tier2/` and `tools/tc_extractor.py`), item 4 pending a Linux build host. Mounting model revised: ONE engine-as-launcher APK, dual-root mounting (TCs at `srceng/<tc>/` launched via `-game`, regular mods auto-scanned from `hl2/custom/`) — spec in `mount-architecture.md`. Renderer risks (BCn→ASTC, water-reflection flicker, shader precision) assessed in `renderer-risk.md`.**
+**Status: in progress — items 1–3 implemented and tested (see `tier2/` and `tools/tc_extractor.py`), item 4 pending a Linux build host. Mounting model revised: ONE engine-as-launcher APK, dual-root mounting (TCs at `srceng/<tc>/` launched via `-game`, regular mods auto-scanned from `hl2/custom/`) — spec in `mount-architecture.md`. Renderer risks (BCn→ASTC, water-reflection flicker, shader precision) assessed in `renderer-risk.md`. Rev 3 fixed a critical planner bug: rev 2 emitted `|moddir|`/`|hl2|` search-path tokens the engine never expands (nothing mounted, guaranteed texture errors); both twins now emit engine-valid tokens with explicit VPK mounts — regression-tested in the C++ and Python suites.**
 
 1. **Mount engine**: multi-search-path `gameinfo.txt` generation; mount arbitrary VPKs/folders as mods without reinstalling.
    - DONE: `tier2/src/mountplanner.cpp` (C++, engine-side) + `tools/tc_extractor.py` (Python twin, PC/CI-side). Mod content mounted first, base HL2 appended last as the fallback that kills texture errors. Round-trip parses as valid KeyValues (tested).
@@ -46,6 +46,8 @@ Gate: EZ2 boots and plays a chapter; a DLL-only mod mounts with full content and
 ## Phase 3 — Launcher (weeks 8–12)
 
 The launcher IS the engine (one APK, no per-mod standalone builds — see `mount-architecture.md`).
+
+**Status: items 1 and 3 shipped in the v0.3.0 launcher APK (dual-section catalog, tier2 classifier + honest warnings, on-device zip import, enable/disable, diagnostics, settings); item 2 (converter UI polish, content downloader) is next. The engine .so bundle joins the APK once Phase 0's engine build lands — until then the launcher hands off to the nillerusr engine app, which reads the same `/sdcard/srceng` root.**
 
 1. Mod catalog with two sections: TC mods (`srceng/<tc>/`, launch via `-game`) and regular mods (`hl2/custom/`, enable/disable, mounted by the engine's custom-folder scan). Per-mod class badge, icon, honest warnings from the tier2 classifier, path mapping handled at import.
 2. Content converter UI (on-device extraction using the same tier2 lib), game-content downloader (Valve-on-android approach), settings, save backup per mod (GDroid-style, but ours and open source).

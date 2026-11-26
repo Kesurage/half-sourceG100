@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">half-sourceG100</string>
+    <string name="tab_tc">TC MODS</string>
+    <string name="tab_reg">REGULAR MODS</string>
+    <string name="btn_import">Import</string>
+    <string name="btn_diag">Device</string>
+    <string name="btn_setup">Setup</string>
+    <string name="btn_rescan">Rescan</string>
+    <string name="btn_launch">LAUNCH</string>
+    <string name="empty_list">Nothing here yet.\n\nTC mods: folders with gameinfo.txt at srceng/\nRegular mods: srceng/hl2/custom/\n\nUse Import to convert a PC mod zip on-device.</string>
+</resources>
