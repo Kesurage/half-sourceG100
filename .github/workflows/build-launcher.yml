@@ -33,7 +33,7 @@ jobs:
       - name: Build launcher-only APK
         run: bash scripts/make-launcher-apk.sh
 
-      - name: Build merged engine APK (ONE APK: manager + engine)
+      - name: "Build merged engine APK (ONE APK: manager + engine)"
         run: bash scripts/make-launcher-apk.sh --with-engine
 
       - uses: actions/upload-artifact@v4
