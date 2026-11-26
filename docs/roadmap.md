@@ -30,10 +30,16 @@ Gate: stable 25–30 fps in playable maps, no crashes across d1_ chapters.
 
 The core differentiator. See `mod-compatibility-pipeline.md` for the spec.
 
+**Status: in progress — items 1–3 implemented and tested (see `tier2/` and `tools/tc_extractor.py`), item 4 pending a Linux build host.**
+
 1. **Mount engine**: multi-search-path `gameinfo.txt` generation; mount arbitrary VPKs/folders as mods without reinstalling.
+   - DONE: `tier2/src/mountplanner.cpp` (C++, engine-side) + `tools/tc_extractor.py` (Python twin, PC/CI-side). Mod content mounted first, base HL2 appended last as the fallback that kills texture errors. Round-trip parses as valid KeyValues (tested).
 2. **Content converter**: PC mod folder → sanitized content set (keep `materials/ models/ maps/ sound/ resource/ scripts/` + VPKs; strip `*.exe`, `bin/*.dll`, launcher junk). Works as PC-side Python tool first, then on-device.
+   - DONE: `tools/tc_extractor.py` — KEEP/STRIP/FIX contract implemented, VPK signature validation (v1/v2), `manifest.json` report per conversion, `--dry-run`. 14/14 Python tests + e2e CLI run verified.
 3. **Mod detector**: identify mod type from its `gameinfo.txt`/binaries — (a) source-available SDK2013/Mapbase mod, (b) content-only, (c) closed Windows DLL mod — and report exactly what will and won't work.
+   - DONE: `tier2/src/modclassifier.cpp` — classes EMPTY / BROKEN_GAMEINFO / SOURCE_MOD / CONTENT_ONLY / DLL_ONLY / STANDALONE_TC with honest per-class notes. Python twin in tc_extractor.py. All classifier tests pass on both.
 4. **EZ2 reference build**: compile [entropy-zero/source-sdk-2013](https://github.com/entropy-zero/source-sdk-2013) (`ez2/mapbase` branch) client/server for aarch64 against our engine. This is the Tier-1 proof case.
+   - PENDING: needs the Phase 0 engine build running first (Linux host).
 
 Gate: EZ2 boots and plays a chapter; a DLL-only mod mounts with full content and no texture errors.
 
