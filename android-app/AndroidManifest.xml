@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- half-sourceG100 Phase 0 shell -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.z.halfsourceg100"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <!-- GLES 3.0: minimum for the togles renderer; native resolution, no scaling -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:touchscreen android:required="true" />
+
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
+    <application
+        android:label="half-sourceG100"
+        android:hasCode="true"
+        android:extractNativeLibs="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:label="half-sourceG100"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:launchMode="singleTask"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

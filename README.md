@@ -4,6 +4,10 @@ Half-Life 2 and Source SDK 2013-lineage mods running natively on Android, with r
 
 Not a port of one game. A **compatibility fork**: the engine, a mod-compatibility layer, and a launcher so PC mods (including DLL mods, where possible) run without manual surgery, texture errors, or "going through hell."
 
+**This is the Source Engine itself, running natively on Android** — not a Winlator/Wine/proton-style translation project. The engine and game code compile as native ARM64 and talk to the GPU directly (GLES today, panvk/Vulkan later). The only place a translation layer ever appears is the Tier-3 last resort for closed-source Windows DLL mods, clearly separated from the native path.
+
+**Native resolution, always.** The game renders at the panel's native resolution; performance work targets engine and asset cost, never pixel count.
+
 ## Target device
 
 Infinix Hot 50 4G — MediaTek Helio G100 (MT6789H), Mali-G57 MC2 (Valhall, JM/kbase kernel driver), 6–8 GB RAM, Android 14. One device, optimized hard for it.
@@ -33,6 +37,7 @@ Infinix Hot 50 4G — MediaTek Helio G100 (MT6789H), Mali-G57 MC2 (Valhall, JM/k
 - `docs/mod-compatibility-pipeline.md` — the Tier 1/2/3 pipeline spec
 - `docs/research-notes.md` — ecosystem research with sources
 - `docs/device-target.md` — hardware target and profiling plan
+- `scripts/` — build environment setup and build scripts (Phase 0)
 
 ## Reference forks (in this account)
 

@@ -2,6 +2,10 @@
 
 Goal: HL2 + Source SDK 2013 / Mapbase mods running on the Infinix Hot 50 4G (Helio G100, Mali-G57 MC2) with maximum PC mod compatibility. Speed and quality both matter; mistakes on this device are expensive, so each phase has a verification gate before the next starts.
 
+**Ground rules (set by the project owner):**
+- This is the **native Source Engine on Android** — not a Winlator/Wine fork. Everything ships as native ARM64 code; translation containers are a last-resort compat path for closed Windows DLL mods only, never the main runtime.
+- **Native resolution, always.** The display renders at the panel's native resolution; no dynamic resolution scaling, no upscaling, no render-scale tricks. Performance comes from engine-side optimization (draw calls, shader cost, asset budgets), not from rendering fewer pixels.
+
 ## Phase 0 — Environment and baseline (week 1)
 
 Deliverables:
@@ -18,7 +22,7 @@ Gate: 15+ fps in the intro map at low settings, no missing textures.
 1. Profile and fix: 2×A76 + 6×A55 scheduling, single big-thread mode, reduce texture streaming pressure (6–8 GB RAM but memory-bandwidth-bound Mali).
 2. Mali-G57 GLES fixes: BCn→fallback decode path (Mali has no BCn hardware), NPOT texture handling, shader cache to skip per-launch compile stutter.
 3. Touch controls: basic layer first (GDroid-style layout can come later), + optional gamepad.
-4. Performance knobs: `-novid`, dynamic resolution, particle/lightmap quality presets baked into a `G100` preset.
+4. Performance knobs: `-novid`, particle/lightmap quality presets baked into a `G100` preset. **Resolution stays native** — the preset only touches shader/asset cost, never the render target size.
 
 Gate: stable 25–30 fps in playable maps, no crashes across d1_ chapters.
 
