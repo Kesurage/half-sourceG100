@@ -30,7 +30,7 @@ Gate: stable 25–30 fps in playable maps, no crashes across d1_ chapters.
 
 The core differentiator. See `mod-compatibility-pipeline.md` for the spec.
 
-**Status: in progress — items 1–3 implemented and tested (see `tier2/` and `tools/tc_extractor.py`), item 4 pending a Linux build host.**
+**Status: in progress — items 1–3 implemented and tested (see `tier2/` and `tools/tc_extractor.py`), item 4 pending a Linux build host. Mounting model revised: ONE engine-as-launcher APK, dual-root mounting (TCs at `srceng/<tc>/` launched via `-game`, regular mods auto-scanned from `hl2/custom/`) — spec in `mount-architecture.md`. Renderer risks (BCn→ASTC, water-reflection flicker, shader precision) assessed in `renderer-risk.md`.**
 
 1. **Mount engine**: multi-search-path `gameinfo.txt` generation; mount arbitrary VPKs/folders as mods without reinstalling.
    - DONE: `tier2/src/mountplanner.cpp` (C++, engine-side) + `tools/tc_extractor.py` (Python twin, PC/CI-side). Mod content mounted first, base HL2 appended last as the fallback that kills texture errors. Round-trip parses as valid KeyValues (tested).
@@ -45,8 +45,11 @@ Gate: EZ2 boots and plays a chapter; a DLL-only mod mounts with full content and
 
 ## Phase 3 — Launcher (weeks 8–12)
 
-1. APK shell grows into a launcher: mod list, content converter UI, game-content downloader (Valve-on-android approach), settings, save backup (GDroid-style, but ours and open source).
-2. On-device mod install from zip/folder; Workshop-style local library.
+The launcher IS the engine (one APK, no per-mod standalone builds — see `mount-architecture.md`).
+
+1. Mod catalog with two sections: TC mods (`srceng/<tc>/`, launch via `-game`) and regular mods (`hl2/custom/`, enable/disable, mounted by the engine's custom-folder scan). Per-mod class badge, icon, honest warnings from the tier2 classifier, path mapping handled at import.
+2. Content converter UI (on-device extraction using the same tier2 lib), game-content downloader (Valve-on-android approach), settings, save backup per mod (GDroid-style, but ours and open source).
+3. On-device mod install from zip/folder; Workshop-style local library.
 
 Gate: a non-technical user can install HL2 content + a mod from the UI and play.
 

@@ -203,6 +203,63 @@ class TestExtract(unittest.TestCase):
         self.assertIn("invalid VPK", joined)
 
 
+class TestMountMode(unittest.TestCase):
+    """Dual-root mount model: TCs at srceng/<tc>/, addons under hl2/custom/."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="hsg100-mode-")
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.out = os.path.join(self.tmp, "out")
+
+    def _mod(self, name, gameinfo, dlls=False, content=True):
+        root = os.path.join(self.tmp, name)
+        os.makedirs(os.path.join(root, "maps") if content else root)
+        if content:
+            with open(os.path.join(root, "maps", "m.bsp"), "wb") as f:
+                f.write(b"b")
+        if dlls:
+            os.makedirs(os.path.join(root, "bin"))
+            for dll in ("client.dll", "server.dll"):
+                with open(os.path.join(root, "bin", dll), "wb") as f:
+                    f.write(b"MZ")
+        if gameinfo:
+            with open(os.path.join(root, "gameinfo.txt"), "w") as f:
+                f.write(gameinfo)
+        return root
+
+    def test_content_only_is_addon(self):
+        src = self._mod("pak1", '"GameInfo"{ game "Pak" title "Pak" }')
+        report = tc.extract(src, self.out)
+        self.assertEqual(report["mount_mode"], "addon")
+        self.assertEqual(report["mount_dest"], f"{self.out}/hl2/custom/pak1")
+        self.assertTrue(os.path.isfile(os.path.join(report["dest"], "maps", "m.bsp")))
+        # addons never get a generated gameinfo (custom-folder semantics)
+        self.assertFalse(report["gameinfo_generated"])
+        self.assertFalse(os.path.exists(os.path.join(report["dest"], "gameinfo.txt")))
+
+    def test_dll_only_is_addon_with_warning(self):
+        src = self._mod("dlmod", '"GameInfo"{ game "DL" }', dlls=True)
+        report = tc.extract(src, self.out)
+        self.assertEqual(report["mount_mode"], "addon")
+        self.assertTrue(os.path.isdir(os.path.join(self.out, "hl2", "custom", "dlmod")))
+        self.assertTrue(any(w.startswith("DLL_ONLY") for w in report["warnings"]))
+
+    def test_standalone_tc_is_tc_mode(self):
+        src = self._mod("bigtc", '"GameInfo"{ game "Big" }')
+        with open(os.path.join(src, "hl2.exe"), "wb") as f:
+            f.write(b"MZ")
+        report = tc.extract(src, self.out)
+        self.assertEqual(report["mount_mode"], "tc")
+        self.assertEqual(report["dest"], os.path.join(self.out, "bigtc"))
+        self.assertTrue(report["gameinfo_generated"])
+        self.assertTrue(os.path.isfile(os.path.join(report["dest"], "gameinfo.txt")))
+
+    def test_empty_gets_no_mount(self):
+        src = self._mod("voidmod", gameinfo=None, content=False)
+        report = tc.extract(src, self.out)
+        self.assertEqual(report["mount_mode"], "none")
+
+
 class TestGameinfoGen(unittest.TestCase):
     def test_priority_order(self):
         gi = tc.generate_gameinfo("mymod", "My Mod")

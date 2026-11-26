@@ -35,9 +35,14 @@ Infinix Hot 50 4G — MediaTek Helio G100 (MT6789H), Mali-G57 MC2 (Valhall, JM/k
 
 - `docs/roadmap.md` — phased development plan, milestones, risks
 - `docs/mod-compatibility-pipeline.md` — the Tier 1/2/3 pipeline spec
+- `docs/mount-architecture.md` — engine-as-launcher, dual-root mounting (TCs at `srceng/<tc>/`, regular mods auto-scanned from `hl2/custom/`), path mapping, incompatibility matrix
+- `docs/renderer-risk.md` — GLES/Mali-G57 renderer risk table + Vulkan/panvk assessment
+- `docs/tier2-implementation.md` — tier2 library layout, contracts, test commands
 - `docs/research-notes.md` — ecosystem research with sources
 - `docs/device-target.md` — hardware target and profiling plan
 - `scripts/` — build environment setup and build scripts (Phase 0)
+- `android-app/` — APK shell (GLES surface, engine .so loader)
+- `tier2/` — mod-compatibility C++ library (classifier, KeyValues, VPK, mount planner); `tools/tc_extractor.py` — PC/CI extraction pipeline; `tests/`
 
 ## Reference forks (in this account)
 

@@ -255,6 +255,25 @@ def generate_gameinfo(mod_dir_name: str, title: str, appid: int = 220) -> str:
 """
 
 
+# ------------------------------------------------------------- mount model
+
+def decide_mount_mode(info: dict) -> str:
+    """Dual-root mount model (docs/mount-architecture.md):
+
+    tc    — mods that replace the game config: own gameinfo, optionally own
+            code (Tier 1). Mounted at srceng/<tc>/ and launched via -game.
+    addon — regular mods that only layer content over HL2. Mounted at
+            srceng/hl2/custom/<addon>/, engine auto-scans them; base HL2
+            client/server code always runs.
+    none  — empty/broken: nothing to mount.
+    """
+    if info["class"] in ("STANDALONE_TC", "SOURCE_MOD"):
+        return "tc"
+    if info["class"] in ("CONTENT_ONLY", "DLL_ONLY"):
+        return "addon"
+    return "none"
+
+
 # ---------------------------------------------------------------- extractor
 
 def extract(src: str, out: str, dry_run: bool = False, keep_docs: bool = False) -> dict:
@@ -263,10 +282,19 @@ def extract(src: str, out: str, dry_run: bool = False, keep_docs: bool = False) 
     # the mod's mounted name is its GAME dir (where gameinfo.txt lives), not
     # whatever wrapper folder the release shipped in
     mod_name = os.path.basename(os.path.normpath(game_dir)) or "mod"
-    dest = os.path.join(out, mod_name)
+    mount_mode = decide_mount_mode(info)
+    # dual-root destination: TCs get their own gamedir, addons go under
+    # hl2/custom/ (engine auto-scan; see mount-architecture.md)
+    dest = (
+        os.path.join(out, mod_name)
+        if mount_mode == "tc"
+        else os.path.join(out, "hl2", "custom", mod_name)
+    )
     report = {
         "mod": mod_name,
         "class": info["class"],
+        "mount_mode": mount_mode,
+        "mount_dest": dest.replace("\\", "/"),
         "title": info["title"] or info["game"],
         "game_dir": game_dir,
         "dest": dest,
@@ -351,15 +379,28 @@ def extract(src: str, out: str, dry_run: bool = False, keep_docs: bool = False) 
             else:
                 strip(rel)
 
-    # preserve original gameinfo and write the generated one
+    # preserve original gameinfo always; generate a new one ONLY for tc mode —
+    # addons are pure content under hl2/custom/ (Valve custom-folder semantics:
+    # no gameinfo, the engine scan mounts them)
     if info["gameinfo"] and not dry_run:
         shutil.copy2(info["gameinfo"], os.path.join(dest, "gameinfo.txt.orig"))
-        gi = generate_gameinfo(mod_name, report["title"])
-        with open(os.path.join(dest, "gameinfo.txt"), "w", encoding="utf-8") as f:
-            f.write(gi)
+    if mount_mode == "tc":
+        if not dry_run:
+            gi = generate_gameinfo(mod_name, report["title"])
+            with open(os.path.join(dest, "gameinfo.txt"), "w", encoding="utf-8") as f:
+                f.write(gi)
         report["gameinfo_generated"] = True
-    elif info["gameinfo"]:
-        report["gameinfo_generated"] = True  # would generate
+    elif mount_mode == "addon":
+        # an addon must not carry an active gameinfo (engine custom-scan mounts
+        # it; a stray gameinfo would confuse gamedir detection) — keep only
+        # the .orig reference copy
+        if not dry_run and info["gameinfo"]:
+            stray = os.path.join(dest, "gameinfo.txt")
+            if os.path.exists(stray):
+                os.remove(stray)
+        report["warnings"].append(
+            "addon mode: no gameinfo generated; mounted via hl2/custom/ engine scan"
+        )
 
     # class-specific guidance (the honest error-reporting contract)
     if info["class"] == "DLL_ONLY":
@@ -401,6 +442,7 @@ def main() -> int:
 
     print(f"mod        : {report['mod']}")
     print(f"class      : {report['class']}")
+    print(f"mount mode : {report['mount_mode']}  ({report['mount_dest']})")
     print(f"title      : {report['title'] or '-'}")
     print(f"kept       : {len(report['kept'])} item(s)")
     print(f"stripped   : {len(report['stripped'])} item(s)")
