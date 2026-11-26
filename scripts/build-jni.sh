@@ -6,9 +6,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
 BASE="${ANDROID_BUILD_BASE:-/home/z/android-build}"
 
-NDK="$(ls -d "$BASE"/ndk* 2>/dev/null | head -1)"
-[ -n "$NDK" ] || { echo "ERROR: no NDK under $BASE — run scripts/setup-android-build.sh" >&2; exit 1; }
-CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++"
+# NDK layout differs by installer: sdkmanager puts it at $BASE/ndk/<version>/,
+# a manual unpack at $BASE/ndk/. Find the aarch64 clang++ either way.
+CXX="$(find "$BASE"/ndk* -path '*prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++' -type f -print 2>/dev/null | sort | tail -1)"
+[ -n "$CXX" ] && [ -x "$CXX" ] || { echo "ERROR: aarch64 NDK clang++ not found under $BASE — run scripts/setup-android-build.sh" >&2; exit 1; }
 
 OUT="$ROOT/android-app/libs/arm64-v8a"
 mkdir -p "$OUT"
