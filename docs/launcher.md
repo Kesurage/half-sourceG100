@@ -10,8 +10,8 @@ and tells you to switch to the engine build when you tap LAUNCH.
 
 1. Grab `HalfSourceG100-Engine-<version>.apk` from
    [releases](https://github.com/Kesurage/half-sourceG100/releases) and install
-   it (allow "install unknown apps" for your browser/file manager). The device
-   needs 32-bit app support (armeabi-v7a) — the Helio G100 has it; the app
+   it (allow "install unknown apps" for your browser/file manager). Since
+   v0.5.0 the engine is 64-bit (arm64-v8a) — the Helio G100 has it; the app
    checks and reports if not.
 2. Open the app once and **grant All files access** when prompted (the content
    root is shared storage — required on Android 11+; the Hot 50 4G runs
