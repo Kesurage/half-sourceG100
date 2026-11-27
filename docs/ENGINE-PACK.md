@@ -97,6 +97,20 @@ Regular mods ride `hl2/custom/` (engine auto-mounts).
 - **GLES 3.0** minimum (togl) — Mali-G57 MC2 provides GLES 3.2.
 - Content: the user's legally-owned HL2 files go in `/sdcard/srceng/hl2`.
 
+## Known constraint: argv tokenization (fixed in the fork, not yet in the pinned build)
+
+The pinned v1.17.0025 `liblauncher.so` splits the Java argv string with
+`strtok(argv, " ")` — **no quoting** — so a `-game` value containing a space
+dies with a fatal missing-gameinfo Error (every TC mod with a spaced folder
+name; base games never have one). The launcher works around it with the
+argv-safe rename (see `docs/mount-architecture.md`, "Launch-time TC first
+aid"). The fork carries the proper fix — a quote-aware tokenizer plus argv
+bounds and NUL-termination (Kesurage/source-engine@56eeb46, verified on host:
+quoted spans survive, plain names unchanged) — which activates when the next
+engine pack is rebuilt from the fork. Until then the launcher must NOT pass
+quoted arguments: the pinned tokenizer would treat the quotes as filename
+characters.
+
 ## Updating the engine pack
 
 When a newer engine build should be bundled (e.g. a future nillerusr

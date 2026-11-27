@@ -51,8 +51,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          NOTES=$(cat <<'NOTES_EOF'
+          Build of $GITHUB_REF_NAME. **HalfSourceG100-Engine-*.apk = the full app** (mod manager + engine, ONE APK; installs over v0.5.x — same signature, your content in /sdcard/srceng is untouched). Install guide: docs/launcher.md, engine details: docs/ENGINE-PACK.md.
+
+          If you were on v0.5.0 and saw a black screen: that was the missing-font bug already fixed in v0.5.1 — this build carries the fix (fonts verified present in assets and the extraction verified in the shipped dex). Install this APK and LAUNCH.
+
+          ## v0.6.0 - TC mods actually launch
+
+          The bug that killed every total-conversion mod (Minerva: Metastasis, Black Mesa-style folders, anything whose folder name contains a space) while base games always worked:
+
+          **The engine's Android entry splits the command line with strtok(argv, " ") - no quoting.** "-game Minerva Metastasis" arrived as "-game Minerva" plus junk, the engine failed its gameinfo.txt lookup and died with a fatal Error before the first frame. hl2/episodic/ep2 never contain a space - that is exactly why they worked and every TC crashed.
+
+          What the launcher now does before every TC launch (TC first aid, TcFirstAid):
+
+          - **Argv-safe folder rename** - "Minerva Metastasis" becomes "minerva_metastasis" (one-time, content untouched, rescan picks it up; badge in the catalog shows "WILL RENAME ON LAUNCH" beforehand)
+          - **gameinfo.txt regeneration** - a PC-original gameinfo (../hl2 paths, dead Steam tokens, foreign SteamAppId) is rewritten into the engine-valid rev-3 form by the same C++ mount planner the importer uses; the original is preserved as gameinfo.pc.txt; a missing gameinfo is generated when the folder has real content
+          - **Ep1/Ep2 fallback** - when srceng/episodic or srceng/ep2 exist, their search paths are added automatically for Ep-lineage mods
+          - **Hardened engine glue** - the gameinfo pre-scan no longer crashes on unreadable/odd-named directories in srceng/ (listFiles() null guards)
+          - **Last-line defense** - EngineHost refuses to start an engine with an argv-unsafe gamedir instead of starting one that is guaranteed to die
+
+          The engine fork also carries the proper fix now (a quote-aware argv tokenizer, Kesurage/source-engine 56eeb46) for the next engine-pack update; the pinned v1.17.0025 binary predates it, so the launcher-side rename remains the shipped mechanism.
+
+          ## How to test (Minerva)
+
+          1. Copy the Minerva folder from your PC install to /sdcard/srceng/ (any name - spaces are fine now)
+          2. Open the app - it appears under TC MODS (badge may say "WILL RENAME ON LAUNCH")
+          3. Tap it, press LAUNCH - the folder is renamed argv-safe and its gameinfo regenerated (toast tells you what happened), then the engine starts with the menu visible (v0.5.1 fonts) and the mod mounted over your hl2 content
+          4. If anything still misbehaves: Diagnostics -> Share all logs as zip
+
+          Regression tests: tests/tc-first-aid (103 assertions - rename table, gameinfo regen through all three planner paths, VPK mount-name rules, episodic lines, idempotency).
+          NOTES_EOF
+          )
           gh release create "$GITHUB_REF_NAME" dist/*.apk \
             --title "half-sourceG100 $GITHUB_REF_NAME" \
-            --notes "Build of $GITHUB_REF_NAME. HalfSourceG100-Engine-*.apk = the full app (mod manager + engine, ONE APK). Install guide: docs/launcher.md, engine details: docs/ENGINE-PACK.md" \
+            --notes "$NOTES" \
           || gh release upload "$GITHUB_REF_NAME" dist/*.apk --clobber \
           || true

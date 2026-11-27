@@ -32,7 +32,11 @@ and tells you to switch to the engine build when you tap LAUNCH.
 ```
 
 - **TC mods** sit at the `srceng/` root. Selecting one in the catalog marks it
-  as the launch target (`-game <tcname>`).
+  as the launch target (`-game <tcname>`). On LAUNCH the folder is renamed
+  argv-safe when needed (the engine's Android command line cannot carry
+  spaces — v0.6.0), its gameinfo is regenerated into the engine-valid form
+  when it is a PC original (original kept as `gameinfo.pc.txt`), and the
+  engine starts. Any folder name works now, including "Minerva Metastasis".
 - **Regular mods** sit in `hl2/custom/`. Tapping one moves it to
   `hl2/custom_disabled/` (a sibling directory, invisible to the engine scan) —
   that's the off switch.
@@ -117,3 +121,20 @@ scan summary, tier2 version. This is the sheet to attach to bug reports.
 - The gameinfo PLAN always comes from the C++ planner (`planMount`) via JNI —
   there is exactly one planner, not three.
 - Black Mesa and HL:Alyx remain out of scope; see `docs/research-notes.md`.
+
+
+## Changelog
+
+- **v0.6.0** — TC first aid: argv-safe folder rename (the engine's Android
+  argv tokenizer has no quoting — spaces in `-game` were fatal), gameinfo
+  regeneration for hand-dropped PC mods, Ep1/Ep2 fallback search paths,
+  null-guarded gameinfo pre-scan, EngineHost refuses argv-unsafe launches.
+  Badge "WILL RENAME ON LAUNCH" in the catalog. Extra args must stay
+  single-token (same tokenizer constraint).
+- **v0.5.1** — black screen fixed: engine fonts extracted to filesDir before
+  every launch (the menu was alive but could not draw a letter).
+- **v0.5.0** — new engine inside (v1.17.0025 aarch64/GLES3, the AruMoon
+  generation), Java glue compiled from source, Android 11-14 permission gates.
+- **v0.4.x** — ONE APK (engine bundled), launch preflight gates, crash guard
+  + watchdog + post-mortem logcat pipeline.
+- **v0.3.0** — Phase 3 launcher alpha (catalog, tier2 classifier, import).
