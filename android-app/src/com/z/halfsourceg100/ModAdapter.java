@@ -53,6 +53,8 @@ final class ModAdapter extends BaseAdapter {
         name.setText(title != null && !title.isEmpty() ? title : e.dirName);
 
         StringBuilder b = new StringBuilder(classLabel(e));
+        if (e.isTc && e.needsRename)
+            b.append(" \u00b7 WILL RENAME ON LAUNCH");
         if (e.mapCount > 0)
             b.append(" \u00b7 ").append(e.mapCount).append(e.mapCount > 1 ? " maps" : " map");
         if (e.sizeBytes > 0) b.append(" \u00b7 ").append(humanSize(e.sizeBytes));

@@ -264,6 +264,9 @@ public class MainActivity extends Activity implements ModAdapter.State {
                 .append(e.disabled ? "_disabled/" : "/").append(e.dirName).append(")\n\n");
         if (!e.isVpkFile) {
             m.append("Class: ").append(info.modClass).append('\n');
+            if (e.isTc && e.needsRename)
+                m.append("Folder: will be renamed on launch (engine command line"
+                        + " cannot take spaces/symbols in -game)\n");
             if (info.game != null && !info.game.isEmpty()) m.append("Game: ").append(info.game).append('\n');
             if (info.title != null && !info.title.isEmpty()) m.append("Title: ").append(info.title).append('\n');
             if (info.steamAppId != 0)
@@ -360,18 +363,38 @@ public class MainActivity extends Activity implements ModAdapter.State {
                     .show();
             return;
         }
+        String lineage = "hl2";
         if (!activeTc.isEmpty()) {
-            File gi = new File(ModScanner.ROOT + "/" + activeTc, "gameinfo.txt");
-            if (!gi.isFile()) {
+            // ---- v0.6.0 TC first aid: make the mod actually launchable ----
+            // (a) the engine's Android argv tokenizer splits on spaces with no
+            //     quoting — "-game Minerva Metastasis" is fatal, so the folder
+            //     is renamed argv-safe first (TcFirstAid.prepare);
+            // (b) a PC-original gameinfo.txt is regenerated into the
+            //     engine-valid rev-3 form by the same C++ mount planner the
+            //     importer uses (original preserved as gameinfo.pc.txt).
+            lineage = lineageOf(activeTc); // before any rename
+            TcFirstAid.Result aid = TcFirstAid.prepare(activeTc);
+            if (aid.failReason != null) {
                 new AlertDialog.Builder(this)
                         .setTitle("TC not ready")
-                        .setMessage("srceng/" + activeTc + "/ has no gameinfo.txt.\n\n"
-                                + "Use Import to run the Tier-2 extraction on the mod's zip, "
-                                + "or place a converted TC folder there.")
+                        .setMessage(aid.failReason)
                         .setPositiveButton("Close", null)
                         .show();
                 return;
             }
+            if (aid.renamedFrom != null) {
+                toast("Renamed for the engine: " + aid.renamedFrom
+                        + " -> " + aid.dirName);
+                setActiveTc(aid.dirName);
+            }
+            if (aid.gameinfoSummary != null) {
+                toast(aid.gameinfoSummary.split("\n")[0]);
+                LogStore.writeLaunchMarker(this, "tc-first-aid " + new java.util.Date()
+                        + "\nmod=" + aid.dirName
+                        + (aid.renamedFrom != null ? "\nrenamed_from=" + aid.renamedFrom : "")
+                        + "\n" + aid.gameinfoSummary);
+            }
+            activeTc = aid.dirName;
         }
         if (!EngineHost.bundled(this) || !EngineHost.sdlPresent()) {
             new AlertDialog.Builder(this)
@@ -402,7 +425,7 @@ public class MainActivity extends Activity implements ModAdapter.State {
             }
         }
 
-        EngineHost.launch(this, activeTc, lineageOf(activeTc));
+        EngineHost.launch(this, activeTc, lineage);
     }
 
     /** Base-game lineage of the active TC (fallback engine game index). */

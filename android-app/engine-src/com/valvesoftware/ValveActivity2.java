@@ -33,15 +33,26 @@ public class ValveActivity2 { // not activity, i am lazy to change native method
 		if( !dir.isDirectory() )
 			return false;
 
-		for( File file : dir.listFiles() )
+		File[] subdirs = dir.listFiles();
+		if( subdirs == null )
+			return false;
+
+		for( File file : subdirs )
 		{
-			if( file.isDirectory() )
+			if( !file.isDirectory() )
+				continue;
+
+			// half-sourceG100 patch: listFiles() can return null on shared
+			// storage (unreadable/odd-named entries) - that used to NPE here
+			// and kill the launch before the engine even started
+			File[] files = file.listFiles();
+			if( files == null )
+				continue;
+
+			for( File f : files )
 			{
-				for( File f : file.listFiles() )
-				{
-					if( f.getName().toLowerCase().equals("gameinfo.txt") )
-						return true;
-				}
+				if( f.getName().toLowerCase().equals("gameinfo.txt") )
+					return true;
 			}
 		}
 
@@ -54,7 +65,12 @@ public class ValveActivity2 { // not activity, i am lazy to change native method
 		if( !dir.isDirectory() )
 			return false;
 
-		for( File file : dir.listFiles() )
+		// half-sourceG100 patch: same null guard as findGameinfo()
+		File[] files = dir.listFiles();
+		if( files == null )
+			return false;
+
+		for( File file : files )
 		{
 			if( file.isFile() && file.getName().toLowerCase().equals("gameinfo.txt") )
 				return true;

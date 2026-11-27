@@ -111,6 +111,13 @@ public final class EngineHost {
     /**
      * Start the bundled engine.
      *
+     * v0.6.0 CONTRACT: gamedir must be argv-safe — the engine's Android entry
+     * tokenizes the command line with strtok(argv, " ") and has NO quoting,
+     * so a name with a space ("Minerva Metastasis") becomes "-game Minerva"
+     * + junk and the engine dies with a fatal missing-gameinfo Error before
+     * the first frame. MainActivity runs TcFirstAid (rename + gameinfo regen)
+     * before calling this; the guard below is the last line of defense.
+     *
      * @param tcDir     "" for vanilla Half-Life 2, else the TC folder under /sdcard/srceng
      * @param tcLineage the TC's base-game lineage (informational; the new engine
      *                  resolves everything through -game <dir> + gameinfo.txt)
@@ -118,6 +125,12 @@ public final class EngineHost {
     public static void launch(Activity act, String tcDir, String tcLineage) {
         boolean isTc = tcDir != null && !tcDir.isEmpty();
         String gameDir = gameDirOf(tcDir, tcLineage);
+        if (TcFirstAid.needsRename(gameDir)) {
+            // never reachable through MainActivity (TcFirstAid renames first) —
+            // refuse rather than start an engine that is guaranteed to die
+            Log.e(TAG, "refusing to launch with argv-unsafe gamedir '" + gameDir + "'");
+            return;
+        }
 
         SharedPreferences hsg = act.getSharedPreferences("hsg100", Activity.MODE_PRIVATE);
         String extraArgs = hsg.getString("extra_args", "-console -condebug").trim();
