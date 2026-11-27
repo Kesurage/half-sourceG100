@@ -10,6 +10,7 @@ import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.io.File;
 import java.util.List;
 
 /**
@@ -27,7 +28,41 @@ public class DiagnosticsActivity extends Activity {
         setContentView(R.layout.activity_diagnostics);
         report = findViewById(R.id.report);
         findViewById(R.id.btn_refresh).setOnClickListener(v -> run());
+        findViewById(R.id.btn_zip_logs).setOnClickListener(v -> shareZip());
         run();
+    }
+
+    /** v0.4.2: one tap -> every log zipped and offered to any share target. */
+    private void shareZip() {
+        new Thread(() -> {
+            final File zip = LogStore.zipAll(this);
+            runOnUiThread(() -> {
+                if (zip == null || !zip.isFile()) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Nothing to share")
+                            .setMessage("No logs yet — they appear after the "
+                                    + "first launch, crash or hang.")
+                            .setPositiveButton("Close", null).show();
+                    return;
+                }
+                try {
+                    android.net.Uri uri = LogFileProvider.uriFor(zip);
+                    android.content.Intent it = new android.content.Intent(
+                            android.content.Intent.ACTION_SEND);
+                    it.setType("application/zip");
+                    it.putExtra(android.content.Intent.EXTRA_STREAM, uri);
+                    it.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(android.content.Intent.createChooser(it, "Share logs zip"));
+                } catch (Throwable t) {
+                    // no FileProvider (should not happen) -> fall back to text
+                    new AlertDialog.Builder(this)
+                            .setTitle("Share failed")
+                            .setMessage("Zip created at " + zip
+                                    + " but no app could share it.\n\n" + t)
+                            .setPositiveButton("Close", null).show();
+                }
+            });
+        }).start();
     }
 
     private void run() {

@@ -43,10 +43,20 @@ public class Hsg100App extends Application {
     public void onCreate() {
         super.onCreate();
 
+        // v0.4.2: if the previous run was SIGKILLed (ANR), its logcat died
+        // with it — capture the ring NOW, while the traces of the kill are
+        // still in the buffer. Must run before anything logs this session.
+        LogStore.capturePostMortem(this);
+
         File dir = LogStore.logDir(this);
         boolean inShared = dir != null
                 && dir.getAbsolutePath().startsWith("/sdcard");
         File crash = LogStore.crashFile(this);
+
+        // v0.4.1 field case: permission was granted mid-session, so run 1
+        // wrote logs into the app-private fallback and run 2 into shared —
+        // half the evidence invisible in Diagnostics. Migrate once.
+        LogStore.migrateFallbackToShared(this);
 
         // 1. native signal guard — only if libtier2jni.so is present and the
         //    crash file is reachable (shared storage needs All-Files-Access)

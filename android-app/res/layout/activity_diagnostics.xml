@@ -25,6 +25,13 @@
             android:layout_marginTop="12dp"
             android:text="Re-run checks" />
 
+        <Button
+            android:id="@+id/btn_zip_logs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Share all logs as zip (for bug reports)" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -40,7 +47,7 @@
             android:layout_height="wrap_content"
             android:textSize="11sp"
             android:textColor="@color/text_dim"
-            android:text="If the game closed by itself, open 'crash report' below — it says why (v0.4.1: crashes are always recorded)." />
+            android:text="Crash, hang (ANR) or launch problem — 'Share all logs as zip' above collects every trace. crash.txt = crashes; watchdog.txt = what each thread was doing during a hang; postmortem-*.txt = logcat of a killed run." />
 
         <LinearLayout
             android:id="@+id/log_list"

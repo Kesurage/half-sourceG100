@@ -116,6 +116,86 @@ public final class LogStore {
         }, "logcat-capture").start();
     }
 
+    /**
+     * v0.4.2 post-mortem: called at the very start of a new process. If the
+     * PREVIOUS run recorded a launch but no exit, it was SIGKILLed (ANR) —
+     * its logcat died with it. The kill traces are still in the ring buffer,
+     * so dump them now, tagged as post-mortem, before this session's own
+     * output buries them.
+     */
+    public static void capturePostMortem(Context ctx) {
+        try {
+            File dir = logDir(ctx);
+            File marker = new File(dir, "engine-last.txt");
+            if (!marker.isFile()) return; // previous run never launched
+            SharedPreferencesEngine.markAppStart(ctx); // this session started
+            if (SharedPreferencesEngine.previousRunClean(ctx)) return;
+            File out = new File(dir, "postmortem-" + System.currentTimeMillis() + ".txt");
+            Process p = new ProcessBuilder("logcat", "-d", "-v", "time")
+                    .redirectErrorStream(true)
+                    .start();
+            java.io.InputStream in = p.getInputStream();
+            java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) fo.write(buf, 0, n);
+            fo.close();
+            p.waitFor();
+            trimPostMortemFiles(dir);
+            Log.w(TAG, "previous run appears to have been killed — post-mortem "
+                    + "logcat captured: " + out.getName());
+        } catch (Throwable t) {
+            Log.w(TAG, "post-mortem capture failed: " + t);
+        }
+    }
+
+    private static void trimPostMortemFiles(File dir) {
+        File[] files = dir.listFiles((d, n) ->
+                n.startsWith("postmortem-") && n.endsWith(".txt"));
+        if (files == null || files.length <= 2) return;
+        Arrays.sort(files, Comparator.comparingLong(File::lastModified));
+        int excess = files.length - 2;
+        for (int i = 0; i < excess; i++) {
+            //noinspection ResultOfMethodCallIgnored
+            files[i].delete();
+        }
+    }
+
+    /**
+     * v0.4.2: move any logs written to the pre-permission fallback dir into
+     * the shared dir, so Diagnostics shows one merged history (the v0.4.1
+     * field report had run 1 in fallback and run 2 in shared).
+     */
+    public static void migrateFallbackToShared(Context ctx) {
+        try {
+            File shared = new File(ModScanner.ROOT, "logs");
+            if (!isWritable(shared)) return;
+            File fbRoot = ctx.getExternalFilesDir(null);
+            if (fbRoot == null) return;
+            File fallback = new File(fbRoot, "logs");
+            File[] files = fallback.listFiles();
+            if (files == null) return;
+            for (File f : files) {
+                if (!f.isFile()) continue;
+                File dst = new File(shared, f.getName());
+                if (dst.exists()) {
+                    // same name: keep the LARGER copy (more evidence)
+                    if (f.length() > dst.length()) {
+                        //noinspection ResultOfMethodCallIgnored
+                        dst.delete();
+                        //noinspection ResultOfMethodCallIgnored
+                        f.renameTo(dst);
+                    }
+                } else {
+                    //noinspection ResultOfMethodCallIgnored
+                    f.renameTo(dst);
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "fallback log migration failed: " + t);
+        }
+    }
+
     private static void trimLogcatFiles(File dir) {
         File[] files = dir.listFiles((d, n) -> n.startsWith("logcat-") && n.endsWith(".txt"));
         if (files == null || files.length <= MAX_LOGCAT_FILES) return;
@@ -158,9 +238,48 @@ public final class LogStore {
         switch (name) {
             case "crash.txt": return "crash report (native + Java)";
             case "engine-last.txt": return "last launch parameters";
+            case "watchdog.txt": return "hang watchdog dumps (thread states)";
             default:
                 if (name.startsWith("logcat-")) return "logcat at launch";
+                if (name.startsWith("postmortem-"))
+                    return "post-mortem: logcat of a killed run (ANR evidence)";
                 return name;
+        }
+    }
+
+    /**
+     * v0.4.2: bundle every log (including the engine console.log) into one
+     * zip next to the logs, so a single share produces the exact attachment
+     * a bug report needs. Returns the zip, or null on failure.
+     */
+    public static File zipAll(Context ctx) {
+        try {
+            File dir = logDir(ctx);
+            String stamp = new java.text.SimpleDateFormat(
+                    "yyyyMMdd-HHmmss", java.util.Locale.ROOT)
+                    .format(new java.util.Date());
+            File zip = new File(dir, "hsg100-logs-" + stamp + ".zip");
+            java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                    new java.io.FileOutputStream(zip));
+            byte[] buf = new byte[8192];
+            for (LogEntry e : listLogs(ctx)) {
+                try {
+                    if (e.file.equals(zip) || !e.file.isFile()) continue;
+                    zos.putNextEntry(new java.util.zip.ZipEntry(e.file.getName()));
+                    try (java.io.FileInputStream in = new java.io.FileInputStream(e.file)) {
+                        int n;
+                        while ((n = in.read(buf)) > 0) zos.write(buf, 0, n);
+                    }
+                    zos.closeEntry();
+                } catch (Throwable ignored) {
+                    // one unreadable file must not kill the whole zip
+                }
+            }
+            zos.close();
+            return zip;
+        } catch (Throwable t) {
+            Log.w(TAG, "zipAll failed: " + t);
+            return null;
         }
     }
 

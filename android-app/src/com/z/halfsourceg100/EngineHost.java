@@ -105,7 +105,11 @@ public final class EngineHost {
         // argv: user args first, -game override last (single -game on the line wins).
         // -condebug is CRITICAL: it is the only switch that makes the engine
         // write console.log at all — without it a dying engine leaves nothing.
+        // -novid (v0.4.2): skip the Bink intro video — a known hang point of
+        // the old port on modern devices; there is nothing to lose, the video
+        // is not needed to play.
         if (!extraArgs.contains("-condebug")) extraArgs = extraArgs + " -condebug";
+        if (!extraArgs.contains("-novid")) extraArgs = extraArgs + " -novid";
         String argv = extraArgs;
         if (isTc) argv = argv + " -game " + tcDir;
 
@@ -146,6 +150,13 @@ public final class EngineHost {
                 + "\nenv=" + env
                 + "\nroot=" + ModScanner.ROOT
                 + "\nprefs=mod (gamepath,argv,env,game,show_touch,res,fixed,immersive)");
+
+        // v0.4.2: mark the run so a killed process is detected on next boot,
+        // then arm the hang watchdog — SIGKILL leaves no trace of its own,
+        // the dumps it takes are the ONLY evidence an ANR produces.
+        SharedPreferencesEngine.markEngineStart(act);
+        Watchdog.arm(act);
+
         LogStore.captureLogcat(act);
 
         Intent it = new Intent(act, org.libsdl.app.SDLActivity.class);

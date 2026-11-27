@@ -86,6 +86,11 @@ public class MainActivity extends Activity implements ModAdapter.State {
     @Override
     protected void onResume() {
         super.onResume();
+        // user is back in the launcher => the engine session is over and it
+        // ended CLEANLY (a kill never returns here). Clears the run-state
+        // marker and retires the hang watchdog (v0.4.2).
+        SharedPreferencesEngine.markEngineEnd(this);
+        Watchdog.cancel();
         checkStorage();
     }
 
