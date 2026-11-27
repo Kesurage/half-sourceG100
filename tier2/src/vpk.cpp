@@ -43,9 +43,14 @@ struct Reader {
 
 } // namespace
 
-// Entry layout per VDC "VPK Format":
-//   CRC u32 | PreloadBytes u16 | ArchiveIndex u16 | EntryOffset u32 |
-//   EntryLength u32 | Terminator u16 (0x0000) | preload data (PreloadBytes)
+// Entry layout per the engine's own reader (vpklib/packedstore.cpp) and
+// VDC "VPK Format" — the v0.6.3 corrected model:
+//   CRC u32 | MetaSize u16 | part* { ArchiveIndex u16, Offset u32, Length
+//   u32 } | Terminator u16 == 0xffff (PACKFILEINDEX_END) | preload bytes
+//   (MetaSize). Real Steam VPKs write 0xffff, never 0x0000 — the v0.6.2
+//   Java twin demanded 0 and falsely rejected every base archive on the
+//   device. Multi-part entries (files spanning chunk archives) are rare
+//   but walked correctly.
 // Directory tree: ext\0 { dir\0 { name\0 <entry> } } with empty string ending
 // each level. dir " " (single space) means file is at the root.
 VpkArchive readVpkDirectory(const std::string &dirVpkPath) {
@@ -80,7 +85,7 @@ VpkArchive readVpkDirectory(const std::string &dirVpkPath) {
         r.u32(); r.u32(); r.u32(); r.u32();
     }
     // TRUNCATION GUARD (the v0.6.2 crash class): the engine reads the tree
-    // with a fixed m_DirectoryDataSize and walks it with unchecked
+    // with a fixed m_nDirectoryDataSize and walks it with unchecked
     // strlen/sprintf — a file shorter than header+treeSize reads
     // uninitialized heap and aborts the engine (FORTIFY: vsprintf, 77844
     // bytes into a 260-byte buffer). Reject such files BEFORE mounting.
@@ -99,13 +104,22 @@ VpkArchive readVpkDirectory(const std::string &dirVpkPath) {
                 e.path = (dir == " ") ? name + "." + ext : dir + "/" + name + "." + ext;
                 e.crc = r.u32();
                 uint16_t preloadBytes = r.u16();
+                if (r.eof) { vpk.err = "truncated entry: " + e.path; return vpk; }
+                // first part descriptor: archiveIdx u16, offset u32, length u32
                 e.archiveIndex = r.u16();
                 e.entryOffset = r.u32();
                 e.entryLength = r.u32();
-                uint16_t terminator = r.u16();
-                if (r.eof) { vpk.err = "truncated entry: " + e.path; return vpk; }
-                if (terminator != 0)
-                    vpk.notes.push_back("nonzero terminator on " + e.path);
+                if (r.eof) { vpk.err = "truncated part descriptor: " + e.path; return vpk; }
+                // further parts of a multi-part entry, until the real
+                // 0xffff terminator (PACKFILEINDEX_END)
+                for (;;) {
+                    uint16_t partIndex = r.u16();
+                    if (r.eof) { vpk.err = "truncated entry (no 0xffff terminator): " + e.path; return vpk; }
+                    if (partIndex == 0xffff) break;
+                    r.u32(); // this part's offset
+                    r.u32(); // this part's length
+                    if (r.eof) { vpk.err = "truncated part descriptor: " + e.path; return vpk; }
+                }
                 if (!r.bytes(preloadBytes)) { vpk.err = "truncated preload: " + e.path; return vpk; }
                 r.pos += preloadBytes; // skip preload data
                 vpk.entries.push_back(std::move(e));

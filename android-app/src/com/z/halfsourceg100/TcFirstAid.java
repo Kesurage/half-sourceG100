@@ -49,19 +49,32 @@ import java.util.Scanner;
  *    rendering). Rev 4 fixed the names and mounted base content through
  *    engine-native *.vpk wildcard globs.
  *
- * 4) WILDCARD MOUNTS A CORRUPT VPK (the v0.6.1 crash, fixed in v0.6.2).
- *    The glob mounts whatever *.vpk files exist — including a truncated or
- *    corrupt archive (an interrupted copy, a bad download). The engine's VPK
- *    directory walk is unchecked (CPackedStore::GetFileList sprintf's each
- *    tree string into MAX_PATH with raw strlen) — one garbage entry and the
- *    process dies: "FORTIFY: vsprintf: prevented 77844-byte write into
- *    260-byte buffer", SIGABRT in LoadPlugins' addons/*.vdf scan, AFTER the
- *    map started loading. Rev 5: no wildcards — the launcher enumerates the
- *    base VPKs that actually exist and deep-validates each (signature,
- *    header-vs-filesize truncation guard, full bounds-checked tree walk)
- *    before emitting exact filenames. A bad archive is skipped with a
- *    warning naming it, never mounted.
- */
+     * 4) WILDCARD MOUNTS A CORRUPT VPK (the v0.6.1 crash, fixed in v0.6.2).
+     *    The glob mounts whatever *.vpk files exist — including a truncated or
+     *    corrupt archive (an interrupted copy, a bad download). The engine's VPK
+     *    directory walk is unchecked (CPackedStore::GetFileList sprintf's each
+     *    tree string into MAX_PATH with raw strlen) — one garbage entry and the
+     *    process dies: "FORTIFY: vsprintf: prevented 77844-byte write into
+     *    260-byte buffer", SIGABRT in LoadPlugins' addons/*.vdf scan, AFTER the
+     *    map started loading. Rev 5: no wildcards — the launcher enumerates the
+     *    base VPKs that actually exist and deep-validates each (signature,
+     *    header-vs-filesize truncation guard, full bounds-checked tree walk)
+     *    before emitting exact filenames. A bad archive is skipped with a
+     *    warning naming it, never mounted.
+     *
+     * 5) THE VALIDATOR REJECTED REAL VPKs (the v0.6.2 false-rejection, fixed
+     *    in v0.6.3). Rev 5's walk demanded a 0x0000 entry terminator and a
+     *    fixed 18-byte entry — but every real Steam VPK writes the engine's
+     *    own PACKFILEINDEX_END 0xffff terminator (and multi-part entries
+     *    exist). ALL 16 base archives were therefore rejected on the real
+     *    device ("base VPKs rejected (not mounted)" in logcat) and every TC
+     *    mod booted with zero base content: "Can't find background image
+     *    'materials/console/...'", no materials, no sounds — the exact
+     *    MINERVA / Lost Coast symptom. The tests passed because the fixtures
+     *    wrote terminator 0 (the model was tested, not reality). Rev 6 walks
+     *    part descriptors until the real 0xffff terminator; the bounds
+     *    checks, not the terminator value, carry the safety.
+     */
 final class TcFirstAid {
 
     private static final String TAG = "half-sourceG100";
@@ -74,8 +87,14 @@ final class TcFirstAid {
      * carries the marker but not this revision is regenerated on sight like
      * a PC original (first backup is never overwritten). Rev 3: stripped
      * _dir names (black screen). Rev 4: wildcards (FORTIFY abort class).
+     * Rev 5: exact validated base mounts, but the validator demanded a
+     * 0x0000 entry terminator — every real Steam VPK writes 0xffff, so all
+     * base archives were falsely rejected and TC mods booted with zero base
+     * content (the v0.6.2 "missing background image" field breakage).
+     * Rev 6: the real part-descriptor walk (terminator 0xffff, multi-part
+     * entries) — real VPKs validate, corrupt ones still don't.
      */
-    static final String PLANNER_REV = "rev 5";
+    static final String PLANNER_REV = "rev 6";
 
     /**
      * argv-safe gamedir: the engine tokenizer splits on spaces and treats a
@@ -296,7 +315,7 @@ final class TcFirstAid {
         sb.append(original == null
                 ? "gameinfo.txt was missing — generated"
                 : original.contains(PLANNER_MARKER)
-                        ? "gameinfo.txt upgraded to the v0.6.2 mount form (validated exact-filename base VPK mounts)"
+                        ? "gameinfo.txt upgraded to the v0.6.3 mount form (real-format VPK validation: 0xffff part terminators, multi-part entries)"
                         : "gameinfo.txt regenerated for the Android engine (original saved as gameinfo.pc.txt)");
         if (!warnings.isEmpty()) for (String w : warnings) sb.append("\n\u00b7 ").append(w);
         if (!vpks.isEmpty()) sb.append("\n\u00b7 ").append(vpks.size()).append(" VPK(s) mounted");
@@ -367,13 +386,20 @@ final class TcFirstAid {
      *   header: marker 0x55aa1234, version (1|2), treeSize, [v2: 16 more
      *           bytes — embeddedChunkSize, chunkHashesSize, selfHashesSize,
      *           signatureSize] => tree at offset 12 (v1) / 28 (v2)
-     *   tree:   ext\0 { dir\0 { name\0 <entry: crc u32, preload u16,
-     *           archiveIdx u16, offset u32, length u32, term u16, preload
-     *           bytes> } } — empty string ends each level; dir " " = root
+     *   tree:   ext\0 { dir\0 { name\0 <entry> } } — empty string ends
+     *           each level; dir " " = root
+     *   entry:  crc u32 | metasize u16 | part* { archiveIdx u16, offset u32,
+     *           length u32 } | terminator u16 == 0xffff (PACKFILEINDEX_END)
+     *           | preload bytes (metasize)
      *
-     * Everything bounds-checked: any walk that runs past the tree end or the
-     * file end => invalid. The engine does NONE of this (raw sprintf into
-     * MAX_PATH, strlen through garbage when the tree is truncated).
+     *   v0.6.3 FIX: the walk used to demand terminator == 0x0000 and a fixed
+     *   18-byte entry — but EVERY real Steam VPK writes 0xffff (the engine's
+     *   own writer does: packedstore.cpp PACKFILEINDEX_END), so all 16 base
+     *   archives were rejected on the real device and TC mods booted with
+     *   zero base content ("Can't find background image", missing
+     *   materials, no sounds). The walk now follows parts until the real
+     *   0xffff terminator (multi-part entries included) — the bounds checks,
+     *   not the terminator value, carry the safety.
      */
     static boolean vpkTreeOk(File f) {
         java.io.RandomAccessFile raf = null;
@@ -417,13 +443,27 @@ final class TcFirstAid {
                         if (nameEnd < 0) return false;
                         if (nameEnd == p) break; // end of names for this dir
                         p = nameEnd;
-                        // fixed entry: crc u32, preload u16, archiveIdx u16,
-                        // offset u32, length u32, terminator u16
-                        if (p + 18 > tree.length) return false;
+                        // fixed part: crc u32 + metasize u16
+                        if (p + 6 > tree.length) return false;
                         int preload = (int) le16(tree, p + 4);
-                        if (le16(tree, p + 16) != 0) return false; // terminator
-                        p += 18 + preload;
-                        if (p > tree.length) return false; // preload runs past tree
+                        p += 6;
+                        // part descriptors until the real 0xffff terminator
+                        // (multi-part entries walk every 10-byte part)
+                        boolean terminated = false;
+                        while (true) {
+                            if (p + 2 > tree.length) return false;
+                            if (le16(tree, p) == 0xFFFF) { // PACKFILEINDEX_END
+                                p += 2;
+                                terminated = true;
+                                break;
+                            }
+                            // a 10-byte part: archiveIdx u16, offset u32, length u32
+                            if (p + 10 > tree.length) return false;
+                            p += 10;
+                        }
+                        if (!terminated) return false;
+                        if (p + preload > tree.length) return false; // preload runs past tree
+                        p += preload;
                     }
                     p++; // skip the empty name that ended this dir level
                 }
@@ -507,10 +547,10 @@ final class TcFirstAid {
 
     /**
      * Java fallback generator — byte-for-byte the same emission shape as the
-     * C++ planner (tier2/src/mountplanner.cpp rev 5). Only used when
+     * C++ planner (tier2/src/mountplanner.cpp rev 6). Only used when
      * libtier2jni is missing; the planner remains the single source of truth.
      *
-     * Base content mounts by EXACT VALIDATED filename (rev 5): the caller
+     * Base content mounts by EXACT VALIDATED filename (rev 5+): the caller
      * deep-validated every archive (signature, truncation guard, full tree
      * walk) — no wildcards, so a corrupt VPK can never reach the engine's
      * unchecked directory walk. Loose dirs stay mounted as the fallback.
@@ -519,7 +559,7 @@ final class TcFirstAid {
                                    List<Tier2Jni.BaseMount> baseMounts) {
         StringBuilder o = new StringBuilder();
         o.append("\"gameinfo\"\n{\n");
-        o.append("\t// generated by half-sourceG100 mount planner (Tier 2, rev 5)\n");
+        o.append("\t// generated by half-sourceG100 mount planner (Tier 2, rev 6)\n");
         o.append("\tgame \"").append(escapeKv(game.isEmpty() ? modDir : game)).append("\"\n");
         o.append("\ttitle \"").append(escapeKv(title)).append("\"\n");
         o.append("\ttitle2 \"\"\n");

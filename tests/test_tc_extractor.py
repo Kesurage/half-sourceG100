@@ -263,19 +263,23 @@ class TestMountMode(unittest.TestCase):
 
 
 class TestGameinfoGen(unittest.TestCase):
-    """Rev 4 contract: engine-valid tokens, real VPK filenames, wildcard base mounts."""
+    """Rev 6 contract: engine-valid tokens, real VPK filenames, loose base
+    dirs only — NO wildcard globs (the v0.6.1 FORTIFY crash class). Exact
+    validated base VPK mounts are the launcher's job (TcFirstAid rev 6)."""
 
     def test_priority_order(self):
         gi = tc.generate_gameinfo("mymod", "My Mod")
         self.assertIn("|gameinfo_path|.", gi)
         self.assertLess(gi.index("|gameinfo_path|."),
                         gi.index("|all_source_engine_paths|hl2"))
-        # rev 4: base content via the engine-native wildcard glob, not
-        # hardcoded (wrongly stripped) filenames
-        self.assertIn("|all_source_engine_paths|hl2/*.vpk", gi)
-        self.assertIn("|all_source_engine_paths|episodic/*.vpk", gi)
-        self.assertIn("|all_source_engine_paths|ep2/*.vpk", gi)
-        self.assertIn("|all_source_engine_paths|platform/*.vpk", gi)
+        # rev 6: base content via loose dirs only; the wildcard globs are
+        # gone (a glob mounted corrupt/truncated archives and the pinned
+        # engine's unchecked VPK walk then aborted the process)
+        self.assertIn("|all_source_engine_paths|hl2\n", gi)
+        self.assertIn("|all_source_engine_paths|episodic\n", gi)
+        self.assertIn("|all_source_engine_paths|ep2\n", gi)
+        self.assertIn("|all_source_engine_paths|platform\n", gi)
+        self.assertNotIn("*.vpk", gi)              # no wildcard mounts at all
         self.assertIn('"220"', gi)
         self.assertNotIn("hl2_textures.vpk\n", gi)  # no stripped-name mounts
         self.assertNotIn("|mymod|", gi)              # engine expands only
@@ -285,10 +289,14 @@ class TestGameinfoGen(unittest.TestCase):
     def test_vpk_mount_names(self):
         gi = tc.generate_gameinfo("m", "T",
                                   vpks=["m_dir.vpk", "m.001.vpk", "solo.vpk"])
-        # rev 4: real filenames — _dir KEPT (engine opens the exact name)
+        # real filenames — _dir KEPT (engine opens the exact name)
         self.assertIn("|gameinfo_path|m_dir.vpk", gi)
         self.assertIn("|gameinfo_path|solo.vpk", gi)  # single-file vpk kept
         self.assertNotIn("001.vpk", gi)              # chunks load via _dir
+
+    def test_rev6_marker(self):
+        gi = tc.generate_gameinfo("m", "T")
+        self.assertIn("rev 6", gi)
 
 
 if __name__ == "__main__":

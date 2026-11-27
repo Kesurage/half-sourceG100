@@ -189,15 +189,18 @@ static std::string makeTestVpk() {
     auto u32 = [&tree](uint32_t v) { tree += std::string((const char *)&v, 4); };
 
     // one entry: materials/test.vmt in archive 000, offset 0, length 10, crc 42
+    // REAL layout (v0.6.3): crc u32, metasize u16, part{ idx u16, ofs u32,
+    // len u32 }, terminator u16 == 0xffff (PACKFILEINDEX_END — what real
+    // Steam VPKs carry; the old 0x0000 fixture was the v0.6.2 false-rejection)
     z("vmt");
     z("materials");
     z("test");
     u32(42);      // crc
-    u16(0);       // preload bytes
-    u16(0);       // archive index (000)
-    u32(0);       // entry offset
-    u32(10);      // entry length
-    u16(0);       // terminator
+    u16(0);       // preload bytes (metasize)
+    u16(0);       // part: archive index (000)
+    u32(0);       // part: entry offset
+    u32(10);      // part: entry length
+    u16(0xffff);  // terminator: PACKFILEINDEX_END
     z("");        // end filenames
     z("");        // end paths
     z("");        // end extensions
@@ -245,13 +248,14 @@ static void testVpkReader() {
     CHECK(vt.err.find("truncated") != std::string::npos);
 
     // v2 header layout: 28 bytes total (marker, version, treeSize + four
-    // more int32s). Skipping only 24 misparses every v2 tree.
+    // more int32s). Skipping only 24 misparses every v2 tree. Entry uses the
+    // real 0xffff terminator (and the embedded-in-dir part index 0x7fff).
     std::string tree;
     auto z = [&tree](const std::string &s) { tree += s; tree += '\0'; };
     auto u16 = [&tree](uint16_t v) { tree += std::string((const char *)&v, 2); };
     auto u32 = [&tree](uint32_t v) { tree += std::string((const char *)&v, 4); };
     z("txt"); z(" "); z("hello");
-    u32(1); u16(0); u16(0x7fff); u32(0); u32(5); u16(0); // embedded in dir
+    u32(1); u16(0); u16(0x7fff); u32(0); u32(5); u16(0xffff); // embedded in dir
     z(""); z(""); z("");
     std::string hdr2;
     uint32_t marker = 0x55aa1234, ver = 2, tsz = (uint32_t)tree.size();
@@ -266,6 +270,62 @@ static void testVpkReader() {
     CHECK(v2a.entries.size() == 1);
     if (!v2a.entries.empty())
         CHECK(v2a.entries[0].path == "hello.txt");
+
+    // MULTI-PART ENTRY (v0.6.3): a file spanning chunk archives walks every
+    // part descriptor before the single 0xffff terminator
+    std::string mtree;
+    auto mz = [&mtree](const std::string &s) { mtree += s; mtree += '\0'; };
+    auto mu16 = [&mtree](uint16_t v) { mtree += std::string((const char *)&v, 2); };
+    auto mu32 = [&mtree](uint32_t v) { mtree += std::string((const char *)&v, 4); };
+    mz("vmt"); mz("materials"); mz("multi");
+    mu32(43);   // crc
+    mu16(0);    // metasize
+    mu16(0);    // part 1: archive index
+    mu32(0);    // part 1: offset
+    mu32(10);   // part 1: length
+    mu16(1);    // part 2: archive index (multi-part!)
+    mu32(0);    // part 2: offset
+    mu32(8);    // part 2: length
+    mu16(0xffff); // terminator after the LAST part
+    mz(""); mz(""); mz("");
+    uint32_t mtsz = (uint32_t)mtree.size();
+    uint32_t mver = 1;
+    std::string mhead;
+    mhead += std::string((const char *)&marker, 4);
+    mhead += std::string((const char *)&mver, 4);
+    mhead += std::string((const char *)&mtsz, 4);
+    writeFile("/tmp/hsg100-test-multi.vpk", mhead + mtree);
+    VpkArchive vmp = readVpkDirectory("/tmp/hsg100-test-multi.vpk");
+    CHECK(vmp.valid());
+    CHECK(vmp.entries.size() == 1);
+    if (!vmp.entries.empty())
+        CHECK(vmp.entries[0].path == "materials/multi.vmt");
+
+    // FAKE TERMINATOR (the v0.6.2 fixture form): 0x0000 is not the engine's
+    // end marker — the parts list never terminates, the walk must reject
+    std::string ftree;
+    auto fz = [&ftree](const std::string &s) { ftree += s; ftree += '\0'; };
+    auto fu16 = [&ftree](uint16_t v) { ftree += std::string((const char *)&v, 2); };
+    auto fu32 = [&ftree](uint32_t v) { ftree += std::string((const char *)&v, 4); };
+    fz("vmt"); fz("materials"); fz("legacy0");
+    fu32(44);  // crc
+    fu16(0);   // metasize
+    fu16(0);   // part: archive index
+    fu32(0);   // part: offset
+    fu32(10);  // part: length
+    fu16(0);   // WRONG terminator (v0.6.2 fixture form)
+    fz(""); fz(""); fz("");
+    uint32_t ftsz = (uint32_t)ftree.size();
+    uint32_t fver = 1;
+    std::string fhead;
+    fhead += std::string((const char *)&marker, 4);
+    fhead += std::string((const char *)&fver, 4);
+    fhead += std::string((const char *)&ftsz, 4);
+    writeFile("/tmp/hsg100-test-fake-term.vpk", fhead + ftree);
+    VpkArchive vft = readVpkDirectory("/tmp/hsg100-test-fake-term.vpk");
+    CHECK(!vft.valid());
+    // the parts list never terminates: the walk runs off the tree
+    CHECK(vft.err.find("truncated") != std::string::npos);
 }
 
 // ----------------------------------------------------------- mountplanner --
