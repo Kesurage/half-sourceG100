@@ -154,6 +154,15 @@ public final class EngineHost {
             Log.w(TAG, "extractVPK failed: " + t);
         }
 
+        // v0.5.1 fix: VGUI fopen()s its fonts from filesDir — without this
+        // copy the menu renders invisible (black screen with a live engine)
+        try {
+            boolean fontsOk = me.nillerusr.ExtractAssets.extractFonts(act);
+            Log.i(TAG, "engine fonts extracted: " + fontsOk);
+        } catch (Throwable t) {
+            Log.w(TAG, "font extraction failed: " + t);
+        }
+
         Log.i(TAG, "engine launch: game=" + gameDir + " argv=" + argv + " vpk=" + vpkPath);
 
         // crash-report pipeline: prove how far the launch got

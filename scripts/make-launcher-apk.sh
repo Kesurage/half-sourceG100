@@ -22,7 +22,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
 APP="$ROOT/android-app"
 BASE="${ANDROID_BUILD_BASE:-/home/z/android-build}"
-BT="$BASE/build-tools/35.0.0"
+BT="$BASE/build-tools/34.0.0"
 PLATFORM="$BASE/platforms/android-34/android.jar"
 [ -f "$PLATFORM" ] || { echo "ERROR: $PLATFORM missing — run scripts/setup-local-sdk.sh" >&2; exit 1; }
 if [ -d "$BASE/jdk17" ]; then export PATH="$BASE/jdk17/bin:$PATH"; fi

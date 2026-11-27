@@ -85,4 +85,64 @@ public class ExtractAssets
 			Log.e("SRCAPK", "Failed to extract vpk:" + e.toString());
 		}
 	}
+
+	/**
+	 * v0.5.1 fix: the engine's VGUI opens its fonts with plain fopen() from
+	 * filesDir ("%s/files/%s.ttf"). The v0.5.0 port only extracted the VPK,
+	 * so every font was missing -> "Failed to load custom font file" x N and
+	 * an invisible (black) menu. This is the font half of upstream's
+	 * extractAssets(): copy every font from APK assets into filesDir.
+	 * extractAsset() skips files that already exist with the right size, so
+	 * this is safe to call before every launch.
+	 */
+	public static final String[] FONTS = {
+		"DroidSansFallback.ttf",
+		"LiberationMono-Regular.ttf",
+		"dejavusans.ttf",
+		"dejavusans-bold.ttf",
+		"dejavusans-oblique.ttf",
+		"dejavusans-boldoblique.ttf",
+	};
+
+	/** Extract one asset to filesDir; overwrite=false keeps intact files. */
+	public static boolean extractAsset(Context context, String name, Boolean overwrite)
+	{
+		ApplicationInfo appinf = context.getApplicationInfo();
+
+		try {
+			File dst = new File(context.getFilesDir().getPath() + "/" + name);
+			if (dst.isFile() && !overwrite && dst.length() > 0)
+				return true;
+
+			InputStream is = context.getAssets().open(name);
+			FileOutputStream os = new FileOutputStream(dst);
+			byte[] buffer = new byte[8192];
+			while (true) {
+				int length = is.read(buffer);
+				if (length <= 0)
+					break;
+				os.write(buffer, 0, length);
+			}
+			os.close();
+			is.close();
+
+			chmod(appinf.dataDir, 0777);
+			chmod(context.getFilesDir().getPath(), 0777);
+			chmod(dst.getPath(), 0777);
+			return true;
+		}
+		catch (Exception e) {
+			Log.e("SRCAPK", "Failed to extract asset " + name + ": " + e.toString());
+			return false;
+		}
+	}
+
+	/** All engine fonts from APK assets -> filesDir (idempotent). */
+	public static boolean extractFonts(Context context)
+	{
+		boolean ok = true;
+		for (String font : FONTS)
+			ok = extractAsset(context, font, false) && ok;
+		return ok;
+	}
 }
