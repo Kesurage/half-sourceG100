@@ -167,5 +167,5 @@ Java_com_z_halfsourceg100_Tier2Jni_planGameinfo(JNIEnv *env, jclass,
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_z_halfsourceg100_Tier2Jni_version(JNIEnv *env, jclass) {
-    return env->NewStringUTF("tier2 rev 3 (engine-valid mount tokens)");
+    return env->NewStringUTF("tier2 rev 4 (real VPK names + wildcard base mounts)");
 }

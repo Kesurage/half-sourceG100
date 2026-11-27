@@ -88,6 +88,22 @@ Base games launch by directory name (`-game hl2|episodic|ep2`). TC mods pass
 `-game <tcdir>`; a content-only TC runs on the bundled HL2 code (Tier 2).
 Regular mods ride `hl2/custom/` (engine auto-mounts).
 
+### gameinfo SearchPaths semantics (v1.17.0025, verified against source)
+
+- A `.vpk` entry is opened AS THE EXACT FILENAME GIVEN
+  (`CBaseFileSystem::AddSearchPathInternal` → `AddVPKFile` →
+  `CPackedStoreRefCount(name)`); there is no `xxx.vpk` → `xxx_dir.vpk`
+  synthesis, and a missing file is dropped silently — no error line.
+- Directory entries add only loose files + legacy `zip*.zip` packs; VPKs are
+  never auto-discovered from a directory.
+- Wildcard entries (`*.vpk`) glob the real filesystem (absolute-path
+  `FindFirst` → `FS_FindFirstFile`), get sorted, and chunk archives of each
+  `_dir.vpk` are deduped automatically — the engine-native way to mount base
+  content whose VPK layout you do not control.
+- These semantics are why the mount planner (rev 4) lists mod VPKs by real
+  filename and mounts hl2/episodic/ep2/platform through `*.vpk` globs; see
+  `docs/mount-architecture.md`.
+
 ## Requirements / constraints
 
 - **64-bit (arm64-v8a) device required.** The bundled engine set is aarch64

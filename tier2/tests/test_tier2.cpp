@@ -242,7 +242,7 @@ static void testMountPlanner() {
     mi.vpks = {"closedmod_dir.vpk", "closedmod.003.vpk", "extra.vpk"};
     MountPlan plan = planMount(mi, "closedmod", 220);
     CHECK(plan.ok);
-    // rev 3: engine-valid tokens only. The engine expands |gameinfo_path| and
+    // rev 4: engine-valid tokens only. The engine expands |gameinfo_path| and
     // |all_source_engine_paths|; rev 2's |moddir| / |hl2| / |platform| were
     // literal directory names and mounted nothing.
     CHECK(plan.gameinfoText.find("|gameinfo_path|.") != std::string::npos);
@@ -251,15 +251,21 @@ static void testMountPlanner() {
     CHECK(plan.gameinfoText.find("|closedmod|") == std::string::npos);
     CHECK(plan.gameinfoText.find("|hl2|") == std::string::npos);
     CHECK(plan.gameinfoText.find("|platform|") == std::string::npos);
-    // VPKs mounted explicitly, _dir suffix stripped, numbered chunks skipped
-    CHECK(plan.gameinfoText.find("|gameinfo_path|closedmod.vpk") != std::string::npos);
+    // rev 4: the mod's VPKs are mounted by REAL filename — _dir suffix KEPT
+    // (the engine opens the exact name given via AddVPKFile ->
+    // CPackedStoreRefCount(name); a stripped name mounts nothing, silently).
+    // Numbered chunks are still skipped (they load through their _dir).
+    CHECK(plan.gameinfoText.find("|gameinfo_path|closedmod_dir.vpk") != std::string::npos);
     CHECK(plan.gameinfoText.find("|gameinfo_path|extra.vpk") != std::string::npos);
     CHECK(plan.gameinfoText.find("003.vpk") == std::string::npos);
-    // no wildcard lines (gameinfo has no glob support)
-    CHECK(plan.gameinfoText.find("*") == std::string::npos);
-    // base VPK entries listed without the _dir suffix
-    CHECK(plan.gameinfoText.find("hl2/hl2_textures.vpk") != std::string::npos);
-    CHECK(plan.gameinfoText.find("_dir.vpk") == std::string::npos);
+    // base content via the engine-native wildcard globs (absolute-path
+    // FindFirst -> FS_FindFirstFile; the engine sorts + dedupes chunks)
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|hl2/*.vpk") != std::string::npos);
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|episodic/*.vpk") != std::string::npos);
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|ep2/*.vpk") != std::string::npos);
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|platform/*.vpk") != std::string::npos);
+    // no stripped-name base mounts (the v0.6.0 black-screen bug)
+    CHECK(plan.gameinfoText.find("hl2_textures.vpk\n") == std::string::npos);
     // priority order: mod content above base content (2013 branch: earlier rows win)
     CHECK(plan.gameinfoText.find("|gameinfo_path|.") <
           plan.gameinfoText.find("|all_source_engine_paths|hl2"));

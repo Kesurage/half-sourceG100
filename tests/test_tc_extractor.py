@@ -263,15 +263,21 @@ class TestMountMode(unittest.TestCase):
 
 
 class TestGameinfoGen(unittest.TestCase):
-    """Rev 3 contract: engine-valid tokens, explicit VPK mounts, priority order."""
+    """Rev 4 contract: engine-valid tokens, real VPK filenames, wildcard base mounts."""
 
     def test_priority_order(self):
         gi = tc.generate_gameinfo("mymod", "My Mod")
         self.assertIn("|gameinfo_path|.", gi)
         self.assertLess(gi.index("|gameinfo_path|."),
                         gi.index("|all_source_engine_paths|hl2"))
-        self.assertIn("hl2/hl2_textures.vpk", gi)   # no _dir suffix in mounts
+        # rev 4: base content via the engine-native wildcard glob, not
+        # hardcoded (wrongly stripped) filenames
+        self.assertIn("|all_source_engine_paths|hl2/*.vpk", gi)
+        self.assertIn("|all_source_engine_paths|episodic/*.vpk", gi)
+        self.assertIn("|all_source_engine_paths|ep2/*.vpk", gi)
+        self.assertIn("|all_source_engine_paths|platform/*.vpk", gi)
         self.assertIn('"220"', gi)
+        self.assertNotIn("hl2_textures.vpk\n", gi)  # no stripped-name mounts
         self.assertNotIn("|mymod|", gi)              # engine expands only
         self.assertNotIn("|hl2|", gi)                # |gameinfo_path| and
         self.assertNotIn("*_dir.vpk", gi)            # |all_source_engine_paths|
@@ -279,7 +285,8 @@ class TestGameinfoGen(unittest.TestCase):
     def test_vpk_mount_names(self):
         gi = tc.generate_gameinfo("m", "T",
                                   vpks=["m_dir.vpk", "m.001.vpk", "solo.vpk"])
-        self.assertIn("|gameinfo_path|m.vpk", gi)    # _dir stripped
+        # rev 4: real filenames — _dir KEPT (engine opens the exact name)
+        self.assertIn("|gameinfo_path|m_dir.vpk", gi)
         self.assertIn("|gameinfo_path|solo.vpk", gi)  # single-file vpk kept
         self.assertNotIn("001.vpk", gi)              # chunks load via _dir
 

@@ -370,7 +370,7 @@ public class MainActivity extends Activity implements ModAdapter.State {
             //     quoting — "-game Minerva Metastasis" is fatal, so the folder
             //     is renamed argv-safe first (TcFirstAid.prepare);
             // (b) a PC-original gameinfo.txt is regenerated into the
-            //     engine-valid rev-3 form by the same C++ mount planner the
+            //     engine-valid rev-4 form by the same C++ mount planner the
             //     importer uses (original preserved as gameinfo.pc.txt).
             lineage = lineageOf(activeTc); // before any rename
             TcFirstAid.Result aid = TcFirstAid.prepare(activeTc);
