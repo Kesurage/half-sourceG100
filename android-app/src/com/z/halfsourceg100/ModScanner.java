@@ -33,6 +33,7 @@ public final class ModScanner {
         public boolean isVpkFile;    // regular mod as a single loose .vpk
         public boolean disabled;     // lives in custom_disabled/
         public boolean present = true; // enabled (in custom/)
+        public boolean needsRename;  // TC dir name breaks the engine argv (v0.6.0)
         public Tier2Jni.Result info = new Tier2Jni.Result();
         public File file;
         public long sizeBytes;
@@ -68,6 +69,7 @@ public final class ModScanner {
             e.isTc = true;
             e.dirName = n;
             e.file = f;
+            e.needsRename = TcFirstAid.needsRename(n) || TcFirstAid.isReserved(n);
             if (Tier2Jni.available()) e.info = Tier2Jni.classify(f.getAbsolutePath());
             e.sizeBytes = dirSize(f);
             e.mapCount = countMaps(f);
