@@ -128,7 +128,8 @@ Java_com_z_halfsourceg100_Tier2Jni_classifyDir(JNIEnv *env, jclass, jstring jpat
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_z_halfsourceg100_Tier2Jni_planGameinfo(JNIEnv *env, jclass,
         jstring jmodClass, jstring jmodDir, jstring jgame, jstring jtitle,
-        jint jappId, jobjectArray jvpks) {
+        jint jappId, jobjectArray jvpks, jobjectArray jbaseGameDirs,
+        jobjectArray jbaseVpks) {
     ModInfo mi;
     mi.modClass = classFromString(jstringToStd(env, jmodClass));
     mi.game = jstringToStd(env, jgame);
@@ -150,7 +151,35 @@ Java_com_z_halfsourceg100_Tier2Jni_planGameinfo(JNIEnv *env, jclass,
         }
     }
 
-    MountPlan plan = planMount(mi, modDir, 220);
+    // validated base-game VPK inventory (rev 5): parallel arrays
+    // [gameDir_0, vpk_0, vpk_1, ..., gameDir_1, vpk_0, ...] — each entry of
+    // jbaseGameDirs names the game dir its run of jbaseVpks entries belongs
+    // to. The launcher validated every filename before handing it here.
+    std::vector<BaseMount> baseMounts;
+    if (jbaseGameDirs && jbaseVpks) {
+        jsize nDirs = env->GetArrayLength(jbaseGameDirs);
+        jsize nVpks = env->GetArrayLength(jbaseVpks);
+        baseMounts.reserve((size_t)(nDirs > 0 ? nDirs : 0));
+        jsize v = 0;
+        for (jsize d = 0; d < nDirs && v < nVpks; ++d) {
+            jstring gd = (jstring)env->GetObjectArrayElement(jbaseGameDirs, d);
+            BaseMount bm;
+            bm.gameDir = jstringToStd(env, gd);
+            env->DeleteLocalRef(gd);
+            while (v < nVpks) {
+                jstring s = (jstring)env->GetObjectArrayElement(jbaseVpks, v);
+                std::string name = jstringToStd(env, s);
+                env->DeleteLocalRef(s);
+                // empty string = separator: next entry starts a new game dir
+                if (name.empty()) { ++v; break; }
+                bm.vpks.push_back(std::move(name));
+                ++v;
+            }
+            baseMounts.push_back(std::move(bm));
+        }
+    }
+
+    MountPlan plan = planMount(mi, modDir, 220, baseMounts);
 
     std::string o = "{\"ok\":";
     o += plan.ok ? "true" : "false";
@@ -167,5 +196,5 @@ Java_com_z_halfsourceg100_Tier2Jni_planGameinfo(JNIEnv *env, jclass,
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_z_halfsourceg100_Tier2Jni_version(JNIEnv *env, jclass) {
-    return env->NewStringUTF("tier2 rev 4 (real VPK names + wildcard base mounts)");
+    return env->NewStringUTF("tier2 rev 5 (validated exact-filename base mounts)");
 }

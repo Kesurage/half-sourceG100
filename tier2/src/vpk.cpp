@@ -72,8 +72,23 @@ VpkArchive readVpkDirectory(const std::string &dirVpkPath) {
     }
     uint32_t treeSize = r.u32();
     if (vpk.version == 2) {
-        // v2 extended header: fileDataSize, archiveSize, selfHashMD5 — skip
-        r.u32(); r.u32(); r.u32();
+        // The pinned engine's VPKDirHeader_t (Source-2013 vpklib) is 7x int32
+        // = 28 bytes: marker, version, treeSize, embeddedChunkSize,
+        // chunkHashesSize, selfHashesSize, signatureSize. For v2 the tree
+        // starts at offset 28 — skip the remaining 16 bytes after treeSize.
+        // (v1 = 12-byte header, tree at 12; nothing more to skip.)
+        r.u32(); r.u32(); r.u32(); r.u32();
+    }
+    // TRUNCATION GUARD (the v0.6.2 crash class): the engine reads the tree
+    // with a fixed m_DirectoryDataSize and walks it with unchecked
+    // strlen/sprintf — a file shorter than header+treeSize reads
+    // uninitialized heap and aborts the engine (FORTIFY: vsprintf, 77844
+    // bytes into a 260-byte buffer). Reject such files BEFORE mounting.
+    if (r.pos + treeSize > buf.size()) {
+        vpk.err = "truncated: file is " + std::to_string(buf.size()) +
+                  " bytes but header claims " + std::to_string(r.pos + treeSize) +
+                  " (directory tree cut off)";
+        return vpk;
     }
     size_t treeEnd = r.pos + treeSize;
 

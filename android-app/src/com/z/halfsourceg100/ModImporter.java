@@ -206,10 +206,13 @@ final class ModImporter {
                     for (File f : fs)
                         if (f.isFile() && f.getName().toLowerCase(Locale.ROOT).endsWith(".vpk"))
                             destVpks.add(f.getName());
+                // rev 5: validated exact-filename base mounts (no wildcards —
+                // a wildcard can mount a corrupt VPK and crash the engine)
+                List<Tier2Jni.BaseMount> baseMounts = TcFirstAid.enumerateBaseMounts();
                 if (Tier2Jni.available()) {
                     Tier2Jni.Result plan = Tier2Jni.plan(modClass, modName,
                             game == null ? modName : game,
-                            title == null ? modName : title, 220, destVpks);
+                            title == null ? modName : title, 220, destVpks, baseMounts);
                     if (plan.ok) {
                         writeUtf8(new File(dest, "gameinfo.txt"), plan.gameinfoText);
                         rep.gameinfoGenerated = true;

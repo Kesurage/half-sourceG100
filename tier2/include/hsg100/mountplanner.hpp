@@ -24,10 +24,22 @@ struct MountPlan {
     bool ok = false;
 };
 
+// One base-game content location, as the launcher measured it on device.
+struct BaseMount {
+    std::string gameDir;          // "hl2", "episodic", "ep2", "platform"
+    std::vector<std::string> vpks; // VALIDATED _dir.vpk filenames (exact names,
+                                   // tree walked + truncation-checked; chunks
+                                   // and corrupt archives excluded)
+};
+
 // baseGameId: Steam app id our engine build runs as (220 = HL2).
-// srcengRoot: absolute path of the srceng/ tree on target (used in |all| paths
-//             only when needed; we prefer relative game paths like "hl2").
+// baseMounts: base-game VPK inventory measured on device. Rev 5 emits exact
+//             validated filenames ONLY — no wildcards (a wildcard mounts
+//             whatever lies in the folder, including corrupt/truncated VPKs
+//             the engine then walks with unchecked strlen/sprintf: the
+//             v0.6.1 FORTIFY abort class). Empty => loose dirs only.
 MountPlan planMount(const ModInfo &mi, const std::string &modGameDir,
-                    uint32_t baseGameId = 220);
+                    uint32_t baseGameId = 220,
+                    const std::vector<BaseMount> &baseMounts = {});
 
 } // namespace hsg100

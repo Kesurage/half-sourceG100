@@ -231,6 +231,41 @@ static void testVpkReader() {
     writeFile(badp, "not a vpk at all");
     VpkArchive bad = readVpkDirectory(badp);
     CHECK(!bad.valid());
+
+    // TRUNCATION (the v0.6.1 field crash): header claims a tree longer than
+    // the file. The engine would walk uninitialized heap -> FORTIFY abort;
+    // the reader must reject it before any mount.
+    std::string full = makeTestVpk();
+    std::ifstream inf(full, std::ios::binary);
+    std::string whole{std::istreambuf_iterator<char>(inf), {}};
+    std::string trunc = whole.substr(0, whole.size() - 4);
+    writeFile("/tmp/hsg100-test-trunc.vpk", trunc);
+    VpkArchive vt = readVpkDirectory("/tmp/hsg100-test-trunc.vpk");
+    CHECK(!vt.valid());
+    CHECK(vt.err.find("truncated") != std::string::npos);
+
+    // v2 header layout: 28 bytes total (marker, version, treeSize + four
+    // more int32s). Skipping only 24 misparses every v2 tree.
+    std::string tree;
+    auto z = [&tree](const std::string &s) { tree += s; tree += '\0'; };
+    auto u16 = [&tree](uint16_t v) { tree += std::string((const char *)&v, 2); };
+    auto u32 = [&tree](uint32_t v) { tree += std::string((const char *)&v, 4); };
+    z("txt"); z(" "); z("hello");
+    u32(1); u16(0); u16(0x7fff); u32(0); u32(5); u16(0); // embedded in dir
+    z(""); z(""); z("");
+    std::string hdr2;
+    uint32_t marker = 0x55aa1234, ver = 2, tsz = (uint32_t)tree.size();
+    hdr2 += std::string((const char *)&marker, 4);
+    hdr2 += std::string((const char *)&ver, 4);
+    hdr2 += std::string((const char *)&tsz, 4);
+    hdr2 += std::string(16, '\0'); // embeddedChunk, chunkHashes, selfHashes, sigSize
+    writeFile("/tmp/hsg100-test-v2.vpk", hdr2 + tree);
+    VpkArchive v2a = readVpkDirectory("/tmp/hsg100-test-v2.vpk");
+    CHECK(v2a.valid());
+    CHECK(v2a.version == 2);
+    CHECK(v2a.entries.size() == 1);
+    if (!v2a.entries.empty())
+        CHECK(v2a.entries[0].path == "hello.txt");
 }
 
 // ----------------------------------------------------------- mountplanner --
@@ -240,9 +275,12 @@ static void testMountPlanner() {
     mi.game = "Closed Mod";
     mi.modName = "Closed Mod";
     mi.vpks = {"closedmod_dir.vpk", "closedmod.003.vpk", "extra.vpk"};
-    MountPlan plan = planMount(mi, "closedmod", 220);
+    std::vector<BaseMount> bases;
+    bases.push_back({"hl2", {"hl2_misc_dir.vpk", "hl2_pak_dir.vpk"}});
+    bases.push_back({"platform", {"platform_misc_dir.vpk"}});
+    MountPlan plan = planMount(mi, "closedmod", 220, bases);
     CHECK(plan.ok);
-    // rev 4: engine-valid tokens only. The engine expands |gameinfo_path| and
+    // engine-valid tokens only. The engine expands |gameinfo_path| and
     // |all_source_engine_paths|; rev 2's |moddir| / |hl2| / |platform| were
     // literal directory names and mounted nothing.
     CHECK(plan.gameinfoText.find("|gameinfo_path|.") != std::string::npos);
@@ -251,21 +289,24 @@ static void testMountPlanner() {
     CHECK(plan.gameinfoText.find("|closedmod|") == std::string::npos);
     CHECK(plan.gameinfoText.find("|hl2|") == std::string::npos);
     CHECK(plan.gameinfoText.find("|platform|") == std::string::npos);
-    // rev 4: the mod's VPKs are mounted by REAL filename — _dir suffix KEPT
+    // the mod's VPKs are mounted by REAL filename — _dir suffix KEPT
     // (the engine opens the exact name given via AddVPKFile ->
     // CPackedStoreRefCount(name); a stripped name mounts nothing, silently).
     // Numbered chunks are still skipped (they load through their _dir).
     CHECK(plan.gameinfoText.find("|gameinfo_path|closedmod_dir.vpk") != std::string::npos);
     CHECK(plan.gameinfoText.find("|gameinfo_path|extra.vpk") != std::string::npos);
     CHECK(plan.gameinfoText.find("003.vpk") == std::string::npos);
-    // base content via the engine-native wildcard globs (absolute-path
-    // FindFirst -> FS_FindFirstFile; the engine sorts + dedupes chunks)
-    CHECK(plan.gameinfoText.find("|all_source_engine_paths|hl2/*.vpk") != std::string::npos);
-    CHECK(plan.gameinfoText.find("|all_source_engine_paths|episodic/*.vpk") != std::string::npos);
-    CHECK(plan.gameinfoText.find("|all_source_engine_paths|ep2/*.vpk") != std::string::npos);
-    CHECK(plan.gameinfoText.find("|all_source_engine_paths|platform/*.vpk") != std::string::npos);
-    // no stripped-name base mounts (the v0.6.0 black-screen bug)
-    CHECK(plan.gameinfoText.find("hl2_textures.vpk\n") == std::string::npos);
+    // rev 5: base VPKs by EXACT validated filename — never a wildcard (a
+    // wildcard mounts whatever lies in the folder, including corrupt/
+    // truncated archives the engine then walks with unchecked strlen/
+    // sprintf: the v0.6.1 "FORTIFY: vsprintf 77844 into 260" abort)
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|hl2/hl2_misc_dir.vpk") != std::string::npos);
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|hl2/hl2_pak_dir.vpk") != std::string::npos);
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|platform/platform_misc_dir.vpk") != std::string::npos);
+    CHECK(plan.gameinfoText.find("*.vpk") == std::string::npos);
+    // loose base dirs stay mounted as the universal fallback
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|episodic\n") != std::string::npos);
+    CHECK(plan.gameinfoText.find("|all_source_engine_paths|ep2\n") != std::string::npos);
     // priority order: mod content above base content (2013 branch: earlier rows win)
     CHECK(plan.gameinfoText.find("|gameinfo_path|.") <
           plan.gameinfoText.find("|all_source_engine_paths|hl2"));
@@ -279,6 +320,12 @@ static void testMountPlanner() {
         CHECK(gi != nullptr);
         if (gi) CHECK(gi->find("SteamAppId")->value() == "220");
     }
+
+    // empty base inventory => loose dirs only, still a valid plan
+    MountPlan noBase = planMount(mi, "closedmod", 220, {});
+    CHECK(noBase.ok);
+    CHECK(noBase.gameinfoText.find("*.vpk") == std::string::npos);
+    CHECK(noBase.gameinfoText.find("|all_source_engine_paths|hl2\n") != std::string::npos);
 
     // broken mods don't get a plan
     ModInfo broken;

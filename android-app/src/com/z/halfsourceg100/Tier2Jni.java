@@ -27,7 +27,23 @@ public final class Tier2Jni {
     /** Mount-planner entry point: returns JSON {ok, gameinfoText, warnings[]}. */
     public static native String planGameinfo(String modClass, String modDir,
                                              String game, String title,
-                                             int steamAppId, String[] vpks);
+                                             int steamAppId, String[] vpks,
+                                             String[] baseGameDirs, String[] baseVpks);
+
+    /**
+     * One base-game content location measured on device: the game dir
+     * ("hl2", "episodic", "ep2", "platform") and its VALIDATED VPK
+     * filenames (exact names, tree-walked; chunks and corrupt archives
+     * already excluded by the caller).
+     */
+    public static class BaseMount {
+        public final String gameDir;
+        public final List<String> vpks;
+        public BaseMount(String gameDir, List<String> vpks) {
+            this.gameDir = gameDir;
+            this.vpks = vpks;
+        }
+    }
 
     public static native String version();
 
@@ -86,11 +102,37 @@ public final class Tier2Jni {
 
     public static Result plan(String modClass, String modDir, String game, String title,
                               int appId, List<String> vpks) {
+        return plan(modClass, modDir, game, title, appId, vpks, null);
+    }
+
+    /**
+     * Rev 5: plan with the validated base-game VPK inventory. baseMounts may
+     * be null (loose dirs only — the pre-rev-5 emission shape minus the
+     * wildcards). The JNI crossing uses parallel arrays with an empty string
+     * as the game-dir separator: [hl2, v0, v1, "", episodic, v0, "", ...].
+     */
+    public static Result plan(String modClass, String modDir, String game, String title,
+                              int appId, List<String> vpks, List<BaseMount> baseMounts) {
         Result r = new Result();
         String json;
+        String[] dirs = null, baseVpks = null;
+        if (baseMounts != null && !baseMounts.isEmpty()) {
+            List<String> d = new ArrayList<>();
+            List<String> v = new ArrayList<>();
+            for (BaseMount bm : baseMounts) {
+                if (bm == null || bm.gameDir == null || bm.gameDir.isEmpty()) continue;
+                d.add(bm.gameDir);
+                if (bm.vpks != null) v.addAll(bm.vpks);
+                v.add(""); // separator: this game dir's run ends here
+            }
+            if (!d.isEmpty()) {
+                dirs = d.toArray(new String[0]);
+                baseVpks = v.toArray(new String[0]);
+            }
+        }
         try {
             json = planGameinfo(modClass, modDir, game, title, appId,
-                    vpks.toArray(new String[0]));
+                    vpks.toArray(new String[0]), dirs, baseVpks);
         } catch (Throwable t) {
             return r;
         }

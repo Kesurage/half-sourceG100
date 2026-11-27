@@ -37,10 +37,14 @@ std::string escapeKv(const std::string &s) {
 //   - therefore _dir.vpk archives MUST be listed with their full real name
 //   - numbered chunk archives (pak01.003.vpk) are opened through their _dir
 //     entry by the VPK code itself and are never listed
-//   - WILDCARD entries (*.vpk) are glob-expanded against the real filesystem
-//     (absolute-path FindFirst -> FS_FindFirstFile), sorted, and the chunk
-//     archives of a _dir.vpk are auto-deduped by the engine — the safest way
-//     to mount base-game content whose VPK layout we do not control
+//   - wildcard entries (*.vpk) glob the real filesystem — powerful but
+//     DANGEROUS here: the glob mounts whatever exists, and the engine walks
+//     every mounted VPK directory with unchecked strlen/sprintf
+//     (CPackedStore::GetFileList). A single corrupt or truncated archive in
+//     the folder = SIGABRT (FORTIFY vsprintf abort; the v0.6.1 field
+//     crash). Base VPKs are therefore emitted as EXACT VALIDATED names by
+//     the launcher (see BaseMount); this helper is only used for the mod's
+//     own root VPKs, which the importer/first-aid already signature-check.
 std::string vpkMountName(const std::string &file) {
     const std::string ext = ".vpk";
     if (file.size() < ext.size() || file.compare(file.size() - ext.size(), ext.size(), ext) != 0)
@@ -62,7 +66,8 @@ std::string vpkMountName(const std::string &file) {
 
 } // namespace
 
-MountPlan planMount(const ModInfo &mi, const std::string &modGameDir, uint32_t baseGameId) {
+MountPlan planMount(const ModInfo &mi, const std::string &modGameDir, uint32_t baseGameId,
+                    const std::vector<BaseMount> &baseMounts) {
     MountPlan plan;
     plan.modGameDir = modGameDir;
 
@@ -71,23 +76,29 @@ MountPlan planMount(const ModInfo &mi, const std::string &modGameDir, uint32_t b
         return plan;
     }
 
-    // ---- search path emission (rev 4) ---------------------------------------
+    // ---- search path emission (rev 5) ---------------------------------------
     // The engine expands exactly two tokens (plus the Steam-only |appid_*|):
     //   |gameinfo_path|            directory containing this gameinfo.txt
     //   |all_source_engine_paths|  base directories (srceng root)
-    // Rev 2 emitted |<moddir>| / |hl2| / |platform| — literal names, nothing
-    // mounted. Rev 3 fixed the tokens but stripped the "_dir" suffix from
-    // VPK names — the engine opens the EXACT filename given, so every base
-    // content line silently mounted nothing (the Minerva black-screen class
-    // of bug: 1936 missing materials, zero VPKs mounted). Rev 4:
-    //   1. the mod's own directory (|gameinfo_path|) — highest priority
-    //   2. each of the mod's VPKs by REAL filename (_dir kept, chunks skipped)
-    //   3. base HL2 loose content (relative + token form, like stock gameinfo)
-    //   4. base HL2 VPKs via the engine-native *.vpk wildcard glob — mounts
-    //      every archive that actually exists in hl2/, chunks auto-deduped
-    //   5. Ep1/Ep2/ep2 and platform, same loose + wildcard forms; a missing
-    //      directory mounts nothing (glob finds no files, loose path falls
-    //      through) so the lines are emitted unconditionally
+    // History of this emission, because every revision was a field lesson:
+    //   rev 2: |<moddir>| / |hl2| / |platform| — literal names, nothing mounted
+    //   rev 3: fixed tokens but STRIPPED the "_dir" suffix from VPK names —
+    //          the engine opens the EXACT filename given, so every base
+    //          content line silently mounted nothing (the Minerva
+    //          black-screen: 1936 missing materials, zero VPKs mounted)
+    //   rev 4: real filenames + *.vpk wildcard base mounts — content mounted
+    //          and the map LOADED, but the wildcard also mounted a
+    //          corrupt/truncated VPK, and the engine's VPK directory walk
+    //          (sprintf into MAX_PATH, unchecked strlen) aborted the process:
+    //          "FORTIFY: vsprintf: prevented 77844-byte write into 260-byte
+    //          buffer" in CPackedStore::GetFileList (v0.6.1 field crash)
+    //   rev 5: the launcher enumerates the base VPKs that actually exist and
+    //          VALIDATES each one (signature + full bounds-checked tree walk,
+    //          truncation guard) before handing the list here. We emit exact
+    //          filenames only — a corrupt archive is skipped with a warning,
+    //          never mounted. Loose dirs stay as the universal fallback: they
+    //          mount no VPKs by themselves (AddPackFiles only scans zip*.pak)
+    //          but keep loose-file content reachable.
     std::set<std::string> mounts;
     for (const auto &v : mi.vpks) {
         std::string m = vpkMountName(v);
@@ -101,7 +112,7 @@ MountPlan planMount(const ModInfo &mi, const std::string &modGameDir, uint32_t b
 
     std::ostringstream o;
     o << "\"gameinfo\"\n{\n";
-    o << "\t// generated by half-sourceG100 mount planner (Tier 2, rev 4)\n";
+    o << "\t// generated by half-sourceG100 mount planner (Tier 2, rev 5)\n";
     o << "\tgame \"" << escapeKv(mi.game.empty() ? modGameDir : mi.game) << "\"\n";
     o << "\ttitle \"" << escapeKv(mi.modName) << "\"\n";
     o << "\ttitle2 \"\"\n";
@@ -115,18 +126,21 @@ MountPlan planMount(const ModInfo &mi, const std::string &modGameDir, uint32_t b
     for (const auto &m : mounts)
         o << "\t\t\tGame\t\t|gameinfo_path|" << m << "\n";
     o << "\t\t\tGame\t\thl2\n";
-    o << "\t\t\tGame\t\t|all_source_engine_paths|hl2/*.vpk\n";
+    // exact, validated base VPKs (rev 5) — emitted before the loose dir so
+    // packed content wins over loose leftovers in the same folder
+    for (const auto &bm : baseMounts) {
+        for (const auto &v : bm.vpks)
+            o << "\t\t\tGame\t\t|all_source_engine_paths|" << bm.gameDir << "/" << v << "\n";
+    }
+    // loose base dirs, always (fallback reachability for loose content)
     o << "\t\t\tGame\t\t|all_source_engine_paths|hl2\n";
-    o << "\t\t\tGame\t\t|all_source_engine_paths|episodic/*.vpk\n";
     o << "\t\t\tGame\t\t|all_source_engine_paths|episodic\n";
-    o << "\t\t\tGame\t\t|all_source_engine_paths|ep2/*.vpk\n";
     o << "\t\t\tGame\t\t|all_source_engine_paths|ep2\n";
-    o << "\t\t\tGame\t\t|all_source_engine_paths|platform/*.vpk\n";
     o << "\t\t\tGame\t\t|all_source_engine_paths|platform\n";
     o << "\t\t}\n\t}\n}\n";
 
     plan.gameinfoText = o.str();
-    plan.warnings.push_back("original gameinfo preserved as gameinfo.txt.orig");
+    plan.warnings.push_back("original gameinfo preserved as gameinfo.pc.txt");
 
     // warnings that describe the compat contract for this mod class
     switch (mi.modClass) {

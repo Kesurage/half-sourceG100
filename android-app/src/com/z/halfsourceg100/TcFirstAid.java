@@ -46,11 +46,21 @@ import java.util.Scanner;
  *    hl2_textures_dir.vpk" synthesis. Rev 3 stripped the _dir suffix, so TC
  *    mods mounted ZERO base HL2 VPKs and booted into a menu of missing
  *    materials (1936 "Missing Vgui material" lines, no UI sounds, no
- *    rendering). Rev 4 lists the mod's own VPKs by real filename and mounts
- *    base content through the engine-native *.vpk wildcard globs, which
- *    glob the real filesystem and auto-dedupe chunk archives — so base
- *    content mounts whatever its actual VPK layout is, and a missing folder
- *    simply contributes nothing.
+ *    rendering). Rev 4 fixed the names and mounted base content through
+ *    engine-native *.vpk wildcard globs.
+ *
+ * 4) WILDCARD MOUNTS A CORRUPT VPK (the v0.6.1 crash, fixed in v0.6.2).
+ *    The glob mounts whatever *.vpk files exist — including a truncated or
+ *    corrupt archive (an interrupted copy, a bad download). The engine's VPK
+ *    directory walk is unchecked (CPackedStore::GetFileList sprintf's each
+ *    tree string into MAX_PATH with raw strlen) — one garbage entry and the
+ *    process dies: "FORTIFY: vsprintf: prevented 77844-byte write into
+ *    260-byte buffer", SIGABRT in LoadPlugins' addons/*.vdf scan, AFTER the
+ *    map started loading. Rev 5: no wildcards — the launcher enumerates the
+ *    base VPKs that actually exist and deep-validates each (signature,
+ *    header-vs-filesize truncation guard, full bounds-checked tree walk)
+ *    before emitting exact filenames. A bad archive is skipped with a
+ *    warning naming it, never mounted.
  */
 final class TcFirstAid {
 
@@ -61,11 +71,11 @@ final class TcFirstAid {
 
     /**
      * Emission revision this launcher understands. A generated gameinfo that
-     * carries the marker but not this revision (rev 3: stripped _dir names,
-     * no wildcard mounts) mounts no base content at all — it is regenerated
-     * on sight like a PC original (first backup is never overwritten).
+     * carries the marker but not this revision is regenerated on sight like
+     * a PC original (first backup is never overwritten). Rev 3: stripped
+     * _dir names (black screen). Rev 4: wildcards (FORTIFY abort class).
      */
-    static final String PLANNER_REV = "rev 4";
+    static final String PLANNER_REV = "rev 5";
 
     /**
      * argv-safe gamedir: the engine tokenizer splits on spaces and treats a
@@ -235,22 +245,42 @@ final class TcFirstAid {
         if (title == null || title.isEmpty()) title = info != null ? info.title : null;
         if (title == null || title.isEmpty()) title = dir.getName();
 
-        // the mod's own root VPKs (mount names; _dir stripped, chunks skipped)
+        // the mod's own root VPKs (mount names; _dir kept, chunks skipped)
         List<String> vpks = rootVpkMounts(dir);
+
+        // rev 5: enumerate + deep-validate the base VPK inventory so the
+        // planner emits exact names only (no wildcards — a wildcard would
+        // mount a corrupt/truncated archive and the engine's unchecked VPK
+        // walk then aborts the process; the v0.6.1 field crash)
+        List<Tier2Jni.BaseMount> baseMounts = enumerateBaseMounts();
+        if (!lastRejects.isEmpty())
+            Log.w(TAG, "base VPKs rejected (not mounted): " + lastRejects);
+        // the mod's own root VPKs get the same deep validation: a truncated
+        // archive in the mod folder is skipped with a warning, not mounted
+        int rejected = 0;
+        List<String> ownValidated = new ArrayList<>();
+        for (String m : vpks) {
+            if (vpkTreeOk(new File(dir, m))) ownValidated.add(m);
+            else rejected++;
+        }
+        vpks = ownValidated;
 
         String text = null;
         List<String> warnings = new ArrayList<>();
         if (Tier2Jni.available()) {
-            Tier2Jni.Result plan = Tier2Jni.plan(modClass, dir.getName(), game, title, 220, vpks);
+            Tier2Jni.Result plan = Tier2Jni.plan(modClass, dir.getName(), game, title, 220, vpks, baseMounts);
             if (plan.ok && plan.gameinfoText != null && !plan.gameinfoText.isEmpty()) {
                 text = plan.gameinfoText;
                 if (plan.warnings != null) warnings.addAll(plan.warnings);
             }
         }
         if (text == null) {
-            text = fallbackGameinfo(dir.getName(), game, title, vpks);
+            text = fallbackGameinfo(dir.getName(), game, title, vpks, baseMounts);
             warnings.add("tier2 planner unavailable — Java fallback gameinfo written");
         }
+        if (rejected > 0)
+            warnings.add(rejected + " invalid VPK(s) skipped (corrupt or truncated — not "
+                    + "mounted; re-copy them if content is missing)");
 
         // carry the original's multiplayer type when it was explicit
         if (type != null) text = text.replace("type \"singleplayer_only\"", "type \"" + type + "\"");
@@ -266,12 +296,179 @@ final class TcFirstAid {
         sb.append(original == null
                 ? "gameinfo.txt was missing — generated"
                 : original.contains(PLANNER_MARKER)
-                        ? "gameinfo.txt upgraded to the v0.6.1 mount form (base VPK wildcard mounts)"
+                        ? "gameinfo.txt upgraded to the v0.6.2 mount form (validated exact-filename base VPK mounts)"
                         : "gameinfo.txt regenerated for the Android engine (original saved as gameinfo.pc.txt)");
         if (!warnings.isEmpty()) for (String w : warnings) sb.append("\n\u00b7 ").append(w);
         if (!vpks.isEmpty()) sb.append("\n\u00b7 ").append(vpks.size()).append(" VPK(s) mounted");
+        int baseCount = 0;
+        for (Tier2Jni.BaseMount bm : baseMounts) baseCount += bm.vpks.size();
+        if (baseCount > 0) {
+            StringBuilder byDir = new StringBuilder();
+            for (Tier2Jni.BaseMount bm : baseMounts) {
+                if (byDir.length() > 0) byDir.append(", ");
+                byDir.append(bm.gameDir).append(": ").append(bm.vpks.size());
+            }
+            sb.append("\n\u00b7 base content: ").append(baseCount)
+                    .append(" VPK(s) mounted (").append(byDir).append(")");
+        }
         return sb.toString();
     }
+
+    // ------------------------------------------------------ rev 5 validation --
+
+    /** Base-game dirs whose VPKs we enumerate + validate + mount by name. */
+    static final String[] BASE_GAME_DIRS = {"hl2", "episodic", "ep2", "platform"};
+
+    /**
+     * The validated base-game VPK inventory of this device's srceng tree:
+     * every *_dir.vpk under hl2/episodic/ep2/platform that passed the deep
+     * validation. Corrupt/truncated archives are excluded and remembered in
+     * {@link #lastRejects} so launch summaries can name them.
+     */
+    public static List<Tier2Jni.BaseMount> enumerateBaseMounts() {
+        List<Tier2Jni.BaseMount> out = new ArrayList<>();
+        lastRejects.clear();
+        for (String gd : BASE_GAME_DIRS) {
+            List<String> rejects = new ArrayList<>();
+            List<String> ok = validatedBaseVpks(new File(ModScanner.ROOT, gd), rejects);
+            lastRejects.addAll(rejects.stream()
+                    .map(n -> gd + "/" + n).collect(java.util.stream.Collectors.toList()));
+            if (!ok.isEmpty()) out.add(new Tier2Jni.BaseMount(gd, ok));
+        }
+        return out;
+    }
+
+    /** Names of archives rejected by the last enumerateBaseMounts() call. */
+    public static final List<String> lastRejects = new ArrayList<>();
+
+    static List<String> validatedBaseVpks(File gameDir, List<String> rejects) {
+        List<String> out = new ArrayList<>();
+        File[] kids = gameDir.listFiles();
+        if (kids == null) return out;
+        Arrays.sort(kids, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+        for (File f : kids) {
+            if (!f.isFile()) continue;
+            String name = f.getName();
+            String low = name.toLowerCase(Locale.ROOT);
+            if (!low.endsWith(".vpk")) continue;
+            // chunks (xxx.003.vpk) load through their _dir entry
+            if (!low.endsWith("_dir.vpk")) continue;
+            if (vpkTreeOk(f)) out.add(name);
+            else rejects.add(name);
+        }
+        return out;
+    }
+
+    /**
+     * DEEP VPK VALIDATION — the gate that keeps the engine's unsafe VPK walk
+     * away from garbage (the v0.6.1 FORTIFY abort). Mirrors the pinned
+     * engine's reader exactly (vpklib/packedstore.cpp + VPKDirHeader_t):
+     *
+     *   header: marker 0x55aa1234, version (1|2), treeSize, [v2: 16 more
+     *           bytes — embeddedChunkSize, chunkHashesSize, selfHashesSize,
+     *           signatureSize] => tree at offset 12 (v1) / 28 (v2)
+     *   tree:   ext\0 { dir\0 { name\0 <entry: crc u32, preload u16,
+     *           archiveIdx u16, offset u32, length u32, term u16, preload
+     *           bytes> } } — empty string ends each level; dir " " = root
+     *
+     * Everything bounds-checked: any walk that runs past the tree end or the
+     * file end => invalid. The engine does NONE of this (raw sprintf into
+     * MAX_PATH, strlen through garbage when the tree is truncated).
+     */
+    static boolean vpkTreeOk(File f) {
+        java.io.RandomAccessFile raf = null;
+        try {
+            raf = new java.io.RandomAccessFile(f, "r");
+            long fileLen = raf.length();
+            if (fileLen < 12) return false;
+            byte[] hdr = new byte[12];
+            raf.readFully(hdr);
+            if (le32(hdr, 0) != 0x55aa1234) return false;
+            int version = (int) le32(hdr, 4);
+            if (version != 1 && version != 2) return false;
+            long treeSize = le32(hdr, 8);
+            long pos = 12;
+            if (version == 2) {
+                if (fileLen < 28) return false;
+                pos = 28;
+            }
+            // truncation guard: the engine trusts treeSize and walks the tree
+            // with unchecked strlen — a file shorter than header+tree reads
+            // uninitialized heap => SIGABRT (FORTIFY vsprintf abort)
+            if (treeSize < 2 || pos + treeSize > fileLen) return false;
+            byte[] tree = new byte[(int) treeSize];
+            raf.seek(pos);
+            raf.readFully(tree);
+
+            // full tree walk, every string and entry bounds-checked
+            int p = 0;
+            while (true) {
+                int extEnd = zstrEnd(tree, p);
+                if (extEnd < 0) return false;
+                if (extEnd == p) break; // end of extensions
+                p = extEnd;
+                while (true) {
+                    int dirEnd = zstrEnd(tree, p);
+                    if (dirEnd < 0) return false;
+                    if (dirEnd == p) break; // end of dirs for this ext
+                    p = dirEnd;
+                    while (true) {
+                        int nameEnd = zstrEnd(tree, p);
+                        if (nameEnd < 0) return false;
+                        if (nameEnd == p) break; // end of names for this dir
+                        p = nameEnd;
+                        // fixed entry: crc u32, preload u16, archiveIdx u16,
+                        // offset u32, length u32, terminator u16
+                        if (p + 18 > tree.length) return false;
+                        int preload = (int) le16(tree, p + 4);
+                        if (le16(tree, p + 16) != 0) return false; // terminator
+                        p += 18 + preload;
+                        if (p > tree.length) return false; // preload runs past tree
+                    }
+                    p++; // skip the empty name that ended this dir level
+                }
+                p++; // skip the empty dir that ended this ext level
+            }
+            // the final ext terminator consumed the last byte — exactly the
+            // tree the engine's writer emits
+            return p <= tree.length;
+        } catch (IOException | RuntimeException e) {
+            return false;
+        } finally {
+            if (raf != null) try { raf.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    /** Little-endian u32 at off, as a non-negative long. */
+    private static long le32(byte[] b, int off) {
+        return ((b[off] & 0xFFL) | ((b[off + 1] & 0xFFL) << 8)
+                | ((b[off + 2] & 0xFFL) << 16) | ((b[off + 3] & 0xFFL) << 24));
+    }
+
+    /** Little-endian u16 at off. */
+    private static int le16(byte[] b, int off) {
+        return (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8);
+    }
+
+    /**
+     * End index (after the NUL) of the string at p, or -1 when it is not
+     * NUL-terminated within the tree or longer than any sane VPK string.
+     * Returns p itself for the EMPTY string (the NUL sits at p) — that is
+     * the level terminator the walk breaks on.
+     */
+    private static int zstrEnd(byte[] tree, int p) {
+        if (p >= tree.length) return -1;
+        if (tree[p] == 0) return p; // empty string: terminator is here
+        int start = p;
+        while (p < tree.length && tree[p] != 0) {
+            if (++p - start > MAX_VPK_STRING) return -1;
+        }
+        if (p >= tree.length) return -1; // unterminated
+        return p + 1; // past the NUL
+    }
+
+    /** Longest sane VPK tree string (extensions/dirs/filenames). */
+    private static final int MAX_VPK_STRING = 512;
 
     /** Root-level VPK files of a mod dir as gameinfo mount lines (real names). */
     static List<String> rootVpkMounts(File dir) {
@@ -288,11 +485,10 @@ final class TcFirstAid {
     }
 
     /**
-     * vpkMountName twin of tier2/src/mountplanner.cpp (rev 4): the REAL
-     * filename as it must appear on the SearchPaths line — _dir suffix KEPT
-     * (the engine opens the exact name given; a stripped name mounts
-     * nothing, silently), numbered chunks skipped (they load through their
-     * _dir entry).
+     * vpkMountName twin of tier2/src/mountplanner.cpp: the REAL filename as
+     * it must appear on the SearchPaths line — _dir suffix KEPT (the engine
+     * opens the exact name given; a stripped name mounts nothing, silently),
+     * numbered chunks skipped (they load through their _dir entry).
      */
     static String vpkMountName(String file) {
         if (file == null) return "";
@@ -311,19 +507,19 @@ final class TcFirstAid {
 
     /**
      * Java fallback generator — byte-for-byte the same emission shape as the
-     * C++ planner (tier2/src/mountplanner.cpp rev 4). Only used when
+     * C++ planner (tier2/src/mountplanner.cpp rev 5). Only used when
      * libtier2jni is missing; the planner remains the single source of truth.
      *
-     * Base content rides the engine-native *.vpk wildcard globs: an
-     * absolute-path FindFirst globs the REAL filesystem, the engine sorts
-     * the matches and dedupes chunk archives of each _dir.vpk itself — so
-     * whatever VPK layout hl2/episodic/ep2/platform actually have on disk
-     * gets mounted, and a missing folder simply contributes nothing.
+     * Base content mounts by EXACT VALIDATED filename (rev 5): the caller
+     * deep-validated every archive (signature, truncation guard, full tree
+     * walk) — no wildcards, so a corrupt VPK can never reach the engine's
+     * unchecked directory walk. Loose dirs stay mounted as the fallback.
      */
-    static String fallbackGameinfo(String modDir, String game, String title, List<String> vpks) {
+    static String fallbackGameinfo(String modDir, String game, String title, List<String> vpks,
+                                   List<Tier2Jni.BaseMount> baseMounts) {
         StringBuilder o = new StringBuilder();
         o.append("\"gameinfo\"\n{\n");
-        o.append("\t// generated by half-sourceG100 mount planner (Tier 2, rev 4)\n");
+        o.append("\t// generated by half-sourceG100 mount planner (Tier 2, rev 5)\n");
         o.append("\tgame \"").append(escapeKv(game.isEmpty() ? modDir : game)).append("\"\n");
         o.append("\ttitle \"").append(escapeKv(title)).append("\"\n");
         o.append("\ttitle2 \"\"\n");
@@ -336,13 +532,17 @@ final class TcFirstAid {
         o.append("\t\t\tGame\t\t|gameinfo_path|.\n");
         for (String m : vpks) o.append("\t\t\tGame\t\t|gameinfo_path|").append(m).append("\n");
         o.append("\t\t\tGame\t\thl2\n");
-        o.append("\t\t\tGame\t\t|all_source_engine_paths|hl2/*.vpk\n");
+        if (baseMounts != null) {
+            for (Tier2Jni.BaseMount bm : baseMounts) {
+                if (bm == null || bm.gameDir == null) continue;
+                for (String v : bm.vpks)
+                    o.append("\t\t\tGame\t\t|all_source_engine_paths|")
+                            .append(bm.gameDir).append("/").append(v).append("\n");
+            }
+        }
         o.append("\t\t\tGame\t\t|all_source_engine_paths|hl2\n");
-        o.append("\t\t\tGame\t\t|all_source_engine_paths|episodic/*.vpk\n");
         o.append("\t\t\tGame\t\t|all_source_engine_paths|episodic\n");
-        o.append("\t\t\tGame\t\t|all_source_engine_paths|ep2/*.vpk\n");
         o.append("\t\t\tGame\t\t|all_source_engine_paths|ep2\n");
-        o.append("\t\t\tGame\t\t|all_source_engine_paths|platform/*.vpk\n");
         o.append("\t\t\tGame\t\t|all_source_engine_paths|platform\n");
         o.append("\t\t}\n\t}\n}\n");
         return o.toString();
