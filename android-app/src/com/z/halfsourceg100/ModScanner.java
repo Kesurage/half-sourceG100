@@ -52,10 +52,7 @@ public final class ModScanner {
         File root = new File(ROOT);
         r.rootExists = root.isDirectory();
         File hl2 = new File(root, "hl2");
-        r.hl2Present = hl2.isDirectory() &&
-                (new File(hl2, "gameinfo.txt").isFile()
-                        || new File(hl2, "maps").isDirectory()
-                        || new File(hl2, "materials").isDirectory());
+        r.hl2Present = hl2.isDirectory() && hl2HasContent(hl2);
         if (!r.rootExists) return r;
 
         // ---- TC mods: first-level dirs except engine-owned
@@ -81,6 +78,22 @@ public final class ModScanner {
         scanCustom(new File(hl2, "custom"), false, r);
         scanCustom(new File(hl2, "custom_disabled"), true, r);
         return r;
+    }
+
+    /**
+     * The engine mounts hl2/ by its VPK set; a bare maps/ dir is not enough
+     * (v0.4.0 counted it as "present" and the engine died silently — the
+     * exact crash this check now prevents).
+     */
+    private static boolean hl2HasContent(File hl2) {
+        File[] kids = hl2.listFiles();
+        if (kids != null)
+            for (File f : kids)
+                if (f.isFile() && f.getName().toLowerCase().endsWith("_dir.vpk"))
+                    return true; // any mounted VPK set = real base content
+        // loose content fallback: some old copies ship unpacked
+        return new File(hl2, "gameinfo.txt").isFile()
+                && new File(hl2, "maps").isDirectory();
     }
 
     private static void scanCustom(File dir, boolean disabled, ScanResult r) {

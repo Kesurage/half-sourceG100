@@ -69,13 +69,38 @@ release archives). The importer:
    the original as `gameinfo.txt.orig`.
 5. Writes a `manifest.json` so the conversion is reproducible.
 
-## Launch
+## Launch (v0.4.1: no silent deaths)
 
-- **Engine bundle bundled** (later releases): starts the engine surface
-  directly with the selected game.
-- **nillerusr engine installed** (`com.valvesoftware.source`): the launcher
-  opens it; it reads the same `/sdcard/srceng` root — pick the game there.
-- **Neither**: the launcher explains the state and points to releases.
+Every launch now passes a hard preflight gate, in order:
+
+1. **All-files access** granted? If not: a dialog explains that the engine
+   reads `/sdcard/srceng` and would die silently after the black screen
+   without it — Grant button included.
+2. **Content root exists?** `srceng/` with `hl2/` — otherwise instructions.
+3. **HL2 base content present?** v0.4.0 counted a bare `maps/` dir as
+   "present"; v0.4.1 requires a real mounted VPK set (`*_dir.vpk`) or
+   `gameinfo.txt` + `maps/` — the engine cannot boot without them.
+4. Only then: prefs written, statics armed, SDLActivity starts.
+
+## Crash reports (v0.4.1)
+
+The engine now always launches with `-condebug`, so it writes its own
+`console.log` into the game dir. On top of that, three traps make sure no
+failure is ever invisible again (all under `srceng/logs/`, viewable and
+shareable in Diagnostics):
+
+| File | What it is |
+|---|---|
+| `crash.txt` | native signals (SIGSEGV/SIGABRT/... with fault address + pc) and Java stack traces, appended |
+| `engine-last.txt` | the exact launch parameters of the last attempt |
+| `logcat-*.txt` | logcat dump captured at launch (newest 3 kept) |
+
+The native trap is async-signal-safe (open+write only, no malloc) and lives
+in `libtier2jni.so` (`android-app/jni/guard.cpp`); it is armed from
+`Hsg100App.onCreate()` before anything engine-related runs. A crash is
+re-raised after recording, so Android's own reporting is unaffected.
+
+**If the game closes by itself: open Diagnostics → crash report — it says why.**
 
 ## Diagnostics (Device screen)
 

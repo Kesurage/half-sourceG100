@@ -313,6 +313,46 @@ public class MainActivity extends Activity implements ModAdapter.State {
             rescan();
             return;
         }
+        // ---- v0.4.1 hard preflight gate: no silent engine deaths anymore ----
+        // Each failure mode below was a "crash with no log" in v0.4.0.
+        if (!storageOk()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Storage permission needed")
+                    .setMessage("The engine reads its content from:\n\n"
+                            + ModScanner.ROOT
+                            + "\n\nWithout \"All files access\" it dies silently "
+                            + "right after the black screen.\n\n"
+                            + "Tap Grant, allow All files access for "
+                            + "half-sourceG100, come back and press LAUNCH again.")
+                    .setPositiveButton("Grant", (d, w) -> askStorage())
+                    .setNegativeButton("Close", null)
+                    .show();
+            return;
+        }
+        if (!scan.rootExists) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Content root missing")
+                    .setMessage("Create the folder structure first:\n\n"
+                            + ModScanner.ROOT + "/hl2/\n"
+                            + ModScanner.ROOT + "/platform/\n\n"
+                            + "hl2/ needs your Half-Life 2 copy (VPKs from your "
+                            + "own Steam install; see README).")
+                    .setPositiveButton("Close", null)
+                    .show();
+            return;
+        }
+        if (!scan.hl2Present) {
+            new AlertDialog.Builder(this)
+                    .setTitle("HL2 base content missing")
+                    .setMessage("srceng/hl2/ exists but has no VPKs and no maps. "
+                            + "The engine needs at least hl2_misc_dir.vpk and "
+                            + "hl2_pak_dir.vpk (from your own Steam copy).\n\n"
+                            + "Without them the engine quits right after start — "
+                            + "with no log (fixed in v0.4.1: it now tells you here).")
+                    .setPositiveButton("Close", null)
+                    .show();
+            return;
+        }
         if (!activeTc.isEmpty()) {
             File gi = new File(ModScanner.ROOT + "/" + activeTc, "gameinfo.txt");
             if (!gi.isFile()) {

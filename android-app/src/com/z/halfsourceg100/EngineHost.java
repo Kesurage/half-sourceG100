@@ -98,11 +98,14 @@ public final class EngineHost {
         int idx = isTc ? gameIndex(tcLineage) : 0;
 
         SharedPreferences hsg = act.getSharedPreferences("hsg100", Activity.MODE_PRIVATE);
-        String extraArgs = hsg.getString("extra_args", "-console").trim();
+        String extraArgs = hsg.getString("extra_args", "-console -condebug").trim();
         String env = hsg.getString("engine_env", "LIBGL_USEVBO=0").trim();
-        if (extraArgs.isEmpty()) extraArgs = "-console";
+        if (extraArgs.isEmpty()) extraArgs = "-console -condebug";
 
-        // argv: user args first, -game override last (single -game on the line wins)
+        // argv: user args first, -game override last (single -game on the line wins).
+        // -condebug is CRITICAL: it is the only switch that makes the engine
+        // write console.log at all — without it a dying engine leaves nothing.
+        if (!extraArgs.contains("-condebug")) extraArgs = extraArgs + " -condebug";
         String argv = extraArgs;
         if (isTc) argv = argv + " -game " + tcDir;
 
@@ -135,6 +138,15 @@ public final class EngineHost {
 
         Log.i(TAG, "engine launch: game=" + gameDir + " idx=" + idx
                 + " argv=" + argv + " res=" + w + "x" + h);
+
+        // crash-report pipeline (v0.4.1): prove how far the launch got
+        LogStore.writeLaunchMarker(act, "launch " + new java.util.Date()
+                + "\ngame=" + gameDir + " idx=" + idx
+                + "\nargv=" + argv
+                + "\nenv=" + env
+                + "\nroot=" + ModScanner.ROOT
+                + "\nprefs=mod (gamepath,argv,env,game,show_touch,res,fixed,immersive)");
+        LogStore.captureLogcat(act);
 
         Intent it = new Intent(act, org.libsdl.app.SDLActivity.class);
         it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

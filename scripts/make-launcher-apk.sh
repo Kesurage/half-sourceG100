@@ -114,8 +114,14 @@ fi
 
 # ---- 6. align + sign ----------------------------------------------------------
 "$BT/zipalign" -f 4 "$STAGE/base.apk" "$STAGE/aligned.apk"
-KEY="$ROOT/dist/debug.keystore"
+# The release keystore is COMMITTED (keystore/halfsource.keystore) so local
+# builds and CI sign identically — users can update over an existing install.
+# (Same practice as the upstream srceng-android repo, which ships its
+# debug.keystore.) Without this, every CI run would generate a fresh key and
+# force an uninstall/reinstall on each release.
+KEY="$ROOT/keystore/halfsource.keystore"
 if [ ! -f "$KEY" ]; then
+  mkdir -p "$ROOT/keystore"
   keytool -genkeypair -keystore "$KEY" -alias halfsource -keyalg RSA -keysize 2048 \
     -validity 10000 -storepass halfsource -keypass halfsource \
     -dname 'CN=half-sourceG100'

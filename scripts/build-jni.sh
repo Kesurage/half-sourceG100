@@ -22,6 +22,8 @@ find_toolchain() {
 TC="$(find_toolchain)"
 [ -n "$TC" ] && [ -d "$TC" ] || { echo "ERROR: NDK toolchain not found under $BASE — run scripts/setup-android-build.sh" >&2; exit 1; }
 
+# guard.cpp is the v0.4.1 crash trap: it rides in the SAME .so as the
+# classifier (libtier2jni.so) so the engine flavor needs no extra lib.
 build_one() {
   local ABI="$1" CXX="$2" OUTDIR="$3"
   [ -x "$CXX" ] || { echo "ERROR: $CXX not found (wrong NDK layout?)" >&2; exit 1; }
@@ -31,13 +33,14 @@ build_one() {
     -Wall -Wextra \
     -I"$ROOT/tier2/include" \
     "$ROOT/android-app/jni/tier2jni.cpp" \
+    "$ROOT/android-app/jni/guard.cpp" \
     "$ROOT/tier2/src/keyvalues.cpp" \
     "$ROOT/tier2/src/modclassifier.cpp" \
     "$ROOT/tier2/src/vpk.cpp" \
     "$ROOT/tier2/src/mountplanner.cpp" \
     -static-libstdc++ \
     -o "$OUT/libtier2jni.so"
-  echo "built: $OUT/libtier2jni.so ($ABI)"
+  echo "built: $OUT/libtier2jni.so ($ABI, tier2 + crash guard)"
 }
 
 case "$WHAT" in

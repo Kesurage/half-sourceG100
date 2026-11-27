@@ -1,11 +1,13 @@
 package com.z.halfsourceg100;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.List;
@@ -32,7 +34,10 @@ public class DiagnosticsActivity extends Activity {
         report.setText("collecting ...");
         new Thread(() -> {
             final StringBuilder s = buildReport();
-            runOnUiThread(() -> report.setText(s.toString()));
+            runOnUiThread(() -> {
+                report.setText(s.toString());
+                populateLogs(); // log list needs the UI thread too
+            });
         }).start();
     }
 
@@ -137,6 +142,80 @@ public class DiagnosticsActivity extends Activity {
                     .append(e.disabled ? ", disabled" : "").append(']');
         s.append('\n');
         return s;
+    }
+
+    // ----------------------------------------------------------- log viewer --
+
+    private void populateLogs() {
+        LinearLayout list = findViewById(R.id.log_list);
+        list.removeAllViews();
+        java.util.List<LogStore.LogEntry> logs = LogStore.listLogs(this);
+        if (logs.isEmpty()) {
+            TextView none = new TextView(this);
+            none.setText("(no logs yet — they appear after the first launch/crash)");
+            none.setTextSize(11f);
+            none.setTextColor(0xFF8B94A7);
+            list.addView(none);
+            return;
+        }
+        java.text.SimpleDateFormat df = new java.text.SimpleDateFormat(
+                "MM-dd HH:mm", java.util.Locale.ROOT);
+        for (LogStore.LogEntry e : logs) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(4), 0, dp(4));
+
+            TextView label = new TextView(this);
+            label.setText(e.label + "\n" + e.file.getName() + "  \u00b7  "
+                    + df.format(new java.util.Date(e.file.lastModified()))
+                    + "  \u00b7  " + human(e.file.length()));
+            label.setTextSize(12f);
+            label.setTextColor(0xFFECEFF4);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            label.setLayoutParams(lp);
+            row.addView(label);
+
+            android.widget.Button open = new android.widget.Button(this);
+            open.setText("View");
+            open.setOnClickListener(v -> showLog(e));
+            row.addView(open);
+
+            android.widget.Button share = new android.widget.Button(this);
+            share.setText("Share");
+            share.setOnClickListener(v -> shareLog(e));
+            row.addView(share);
+
+            list.addView(row);
+        }
+    }
+
+    private void showLog(LogStore.LogEntry e) {
+        new AlertDialog.Builder(this)
+                .setTitle(e.label)
+                .setMessage(LogStore.tail(e.file))
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Share", (d, w) -> shareLog(e))
+                .show();
+    }
+
+    private void shareLog(LogStore.LogEntry e) {
+        try {
+            android.content.Intent it = new android.content.Intent(
+                    android.content.Intent.ACTION_SEND);
+            it.setType("text/plain");
+            it.putExtra(android.content.Intent.EXTRA_TEXT,
+                    LogStore.tail(e.file));
+            it.putExtra(android.content.Intent.EXTRA_SUBJECT,
+                    "half-sourceG100 log: " + e.file.getName());
+            startActivity(android.content.Intent.createChooser(it, "Share log"));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
     private int countEnabled(List<ModScanner.Entry> l) {
