@@ -20,12 +20,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install SDK pieces (build-tools 34, platform 34, NDK)
+      - name: Install SDK pieces (build-tools 35, platform 34, NDK)
         run: |
           SDKM="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
           [ -x "$SDKM" ] || SDKM="sdkmanager"
           yes | "$SDKM" --licenses >/dev/null 2>&1 || true
-          "$SDKM" "platforms;android-34" "build-tools;34.0.0" "ndk;27.3.13750724" >/dev/null
+          "$SDKM" "platforms;android-34" "build-tools;35.0.0" "ndk;27.3.13750724" >/dev/null
 
       - name: Build tier2 JNI libraries (aarch64 + armv7a)
         run: bash scripts/build-jni.sh all

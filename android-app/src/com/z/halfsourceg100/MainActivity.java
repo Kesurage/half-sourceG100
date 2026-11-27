@@ -174,8 +174,10 @@ public class MainActivity extends Activity implements ModAdapter.State {
         if (!EngineHost.bundled(this))
             return "not bundled in this build (launcher-only) — get the engine build from Releases";
         if (!EngineHost.deviceAbiOk())
-            return "bundled, but this device has no 32-bit app support (armeabi-v7a required)";
-        return "bundled (old-port GLES2) \u00b7 armeabi-v7a \u00b7 "
+            return "bundled, but this device has no 64-bit support (arm64-v8a required)";
+        if (!EngineHost.gles3Ok(this))
+            return "bundled, but this device reports GLES < 3.0 (engine needs GLES3)";
+        return EngineHost.ENGINE_ID + " \u00b7 arm64-v8a \u00b7 "
                 + (EngineHost.sdlPresent() ? "SDL glue ok" : "SDL glue MISSING");
     }
 
@@ -383,7 +385,11 @@ public class MainActivity extends Activity implements ModAdapter.State {
             return;
         }
         if (!EngineHost.deviceAbiOk()) {
-            toast("This device does not support 32-bit apps (armeabi-v7a) — engine cannot run");
+            toast("This device does not support 64-bit apps (arm64-v8a) — engine cannot run");
+            return;
+        }
+        if (!EngineHost.gles3Ok(this)) {
+            toast("This device reports GLES < 3.0 — the engine needs GLES3 (Vulkan/panvk is Phase 3)");
             return;
         }
 

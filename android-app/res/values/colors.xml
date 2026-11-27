@@ -8,4 +8,6 @@
     <color name="warn">#FFE0A03C</color>
     <color name="err">#FFE05C5C</color>
     <color name="line">#FF1C212B</color>
+    <color name="hl_color">#F79A10</color>
+    <color name="spin_color">#3F3F3F</color>
 </resources>

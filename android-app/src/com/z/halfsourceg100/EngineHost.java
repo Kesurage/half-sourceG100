@@ -3,10 +3,7 @@ package com.z.halfsourceg100;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.os.Build;
-import android.util.DisplayMetrics;
 import android.util.Log;
-import android.view.WindowManager;
 
 import java.io.File;
 
@@ -15,56 +12,65 @@ import me.nillerusr.G100Bridge;
 /**
  * Bundled-engine launch path — ONE APK, engine inside (docs/ENGINE-PACK.md).
  *
- * The bundled engine is the nillerusr old-port build (NVIDIA Shield-port
- * lineage, GLES2 via Regal, armeabi-v7a). Its startup contract, recovered
- * from the shipped classes.dex:
+ * Since v0.5.0 the bundled engine is the modern nillerusr-lineage build
+ * (v1.17.0025, aarch64, togl/GLES3, liblauncher.so entry) — the same engine
+ * generation AruMoon's "Source Engine for Android" app ships. It replaces the
+ * old 32-bit debug port that hung on startup on Android 14 (see v0.4.2 notes).
  *
- *   SDLActivity.onCreate()
- *     -> ValveActivity2.initNatives()          (engine-side Java callback)
- *        reads SharedPreferences "mod":
- *          gamepath              content root  -> setDocumentDirectoryPath
- *          argv    (default -console)          -> setArgs   (Source cmdline)
- *          env     (default LIBGL_USEVBO=0)    -> setEnvs
- *          game    (int index into the Games table below) -> setGame
- *                                                + LIBRARY_SERVER/LIBRARY_CLIENT
- *          show_touch, resolution_*, fixed_resolution, immersive_mode
- *     -> SDLMain.run() -> nativeInit() -> libengine.so
+ * Startup contract (recovered from srceng-android, verified against the
+ * shipped dex of v1.17.0025):
  *
- * Before SDLActivity can run, its statics (me.nillerusr.LauncherActivity.mPref
- * / scr_res / PKG_NAME / found_main_obb) must be initialized — that is what
- * me.nillerusr.G100Bridge.prepare() does, from this package.
+ *   MainActivity (ours) -> EngineHost.launch()
+ *       writes SharedPreferences "mod":
+ *         gamepath = /sdcard/srceng     (VALVE_GAME_PATH, content root)
+ *         argv     = <user args>        (fallback when no intent extra)
+ *         env      = KEY=VALUE pairs    (optional)
+ *       -> G100Bridge.prepare()         (engine-side statics)
+ *       -> ExtractAssets.extractVPK()   (assets/extras_dir.vpk -> filesDir,
+ *                                        touch UI; first run only)
+ *       -> startActivity(org.libsdl.app.SDLActivity)
+ *            extras: gamedir     (hl2 / episodic / ep2 / <tc>)
+ *                    gamelibdir  (nativeLibraryDir: bundled client/server)
+ *                    vpk         (filesDir/extras_dir.vpk)
+ *                    argv        (-console -condebug -novid ...)
+ *            -> SDLActivity.init()
+ *                 loads SDL2 + launcher (liblauncher.so)
+ *                 -> ValveActivity2.preInit()  (gameinfo.txt must exist)
+ *                 -> ValveActivity2.initNatives()
+ *                      setenv APP_LIB_PATH / APP_DATA_PATH / VALVE_GAME_PATH
+ *                      setenv APP_MOD_LIB (gamelibdir) / EXTRAS_VPK_PATH (vpk)
+ *                      argv = "-game <gamedir> " + argv
+ *                 -> SDLMain -> LauncherMainAndroid (native)
  *
- * Base games launch through the official table index (guaranteed path).
- * TC mods additionally pass "-game <dir>" on the argv; the engine carries a
- * standard Source cmdline parser ("-game %s", gameinfo.txt), and the closest
- * base game index is still set from the TC's lineage so a TC that loses the
- * -game race degrades to its nearest base game instead of failing hard.
+ * TC mods pass gamedir=<tc>; a content-only TC falls back to the bundled HL2
+ * client/server code (Tier-2). Regular mods ride hl2/custom/ (engine mounts).
  */
 public final class EngineHost {
 
     private static final String TAG = "half-sourceG100";
     private static final String PREFS = "mod"; // engine-side SharedPreferences
 
-    /** Mirrors com.valvesoftware.Games in the bundled engine's dex. */
-    public static final String[] BASE_GAMES = {"hl2", "episodic", "ep2", "portal"};
+    /** Engine build identifier, shown in diagnostics. */
+    public static final String ENGINE_ID = "srceng v1.17.0025 (aarch64/togles)";
 
     private EngineHost() {}
 
-    /** True when this APK carries the engine .so set (lib/armeabi-v7a/libmain.so). */
+    /** True when this APK carries the engine .so set (lib/arm64-v8a/liblauncher.so). */
     public static boolean bundled(Activity act) {
         try {
             String dir = act.getApplicationInfo().nativeLibraryDir;
-            return dir != null && new File(dir, "libmain.so").isFile();
+            return dir != null && new File(dir, "liblauncher.so").isFile();
         } catch (Throwable t) {
             return false;
         }
     }
 
-    /** 32-bit app support is required by the bundled engine (armeabi-v7a). */
+    /** 64-bit (arm64-v8a) device support is required by the bundled engine. */
     public static boolean deviceAbiOk() {
-        String[] abis = Build.SUPPORTED_ABIS;
+        String[] abis = android.os.Build.SUPPORTED_ABIS;
         if (abis == null) return false;
-        for (String a : abis) if (a.contains("armeabi")) return true;
+        for (String a : abis)
+            if (a.contains("arm64-v8a")) return true;
         return false;
     }
 
@@ -77,90 +83,100 @@ public final class EngineHost {
         }
     }
 
-    /** Index into the bundled engine's game table; unknown dirs fall back to HL2. */
-    public static int gameIndex(String dir) {
-        if (dir != null)
-            for (int i = 0; i < BASE_GAMES.length; i++)
-                if (BASE_GAMES[i].equalsIgnoreCase(dir)) return i;
-        return 0;
+    /**
+     * GLES 3.0 minimum for the togl renderer (Mali-G57 MC2: GLES 3.2 — fine).
+     */
+    public static boolean gles3Ok(Activity act) {
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager)
+                    act.getSystemService(android.content.Context.ACTIVITY_SERVICE);
+            android.content.pm.ConfigurationInfo ci = am.getDeviceConfigurationInfo();
+            return ci != null && ci.reqGlEsVersion >= 0x30000;
+        } catch (Throwable t) {
+            return true; // cannot tell — let the engine try
+        }
+    }
+
+    /** Normalize a TC/base-game lineage into a launchable gamedir. */
+    public static String gameDirOf(String tcDir, String lineage) {
+        boolean isTc = tcDir != null && !tcDir.isEmpty();
+        if (!isTc) return "hl2";
+        // base games are launched by their own dir name
+        if (tcDir.equals("hl2") || tcDir.equals("episodic") || tcDir.equals("ep2") || tcDir.equals("portal"))
+            return tcDir;
+        return tcDir; // TC: engine gets -game <tcdir>; content-only TCs use
+                      // the generated gameinfo.txt + bundled HL2 code
     }
 
     /**
      * Start the bundled engine.
      *
      * @param tcDir     "" for vanilla Half-Life 2, else the TC folder under /sdcard/srceng
-     * @param tcLineage the TC's base-game lineage ("hl2"/"episodic"/"ep2"/"portal")
-     *                  used for the fallback game index
+     * @param tcLineage the TC's base-game lineage (informational; the new engine
+     *                  resolves everything through -game <dir> + gameinfo.txt)
      */
     public static void launch(Activity act, String tcDir, String tcLineage) {
         boolean isTc = tcDir != null && !tcDir.isEmpty();
-        String gameDir = isTc ? tcDir : "hl2";
-        int idx = isTc ? gameIndex(tcLineage) : 0;
+        String gameDir = gameDirOf(tcDir, tcLineage);
 
         SharedPreferences hsg = act.getSharedPreferences("hsg100", Activity.MODE_PRIVATE);
         String extraArgs = hsg.getString("extra_args", "-console -condebug").trim();
-        String env = hsg.getString("engine_env", "LIBGL_USEVBO=0").trim();
         if (extraArgs.isEmpty()) extraArgs = "-console -condebug";
 
-        // argv: user args first, -game override last (single -game on the line wins).
-        // -condebug is CRITICAL: it is the only switch that makes the engine
-        // write console.log at all — without it a dying engine leaves nothing.
-        // -novid (v0.4.2): skip the Bink intro video — a known hang point of
-        // the old port on modern devices; there is nothing to lose, the video
-        // is not needed to play.
+        // -condebug: engine writes console.log — the single most valuable file
+        // when a run dies. -novid: skip the Bink intro (old hang point, and the
+        // new engine still pays startup time for it).
         if (!extraArgs.contains("-condebug")) extraArgs = extraArgs + " -condebug";
         if (!extraArgs.contains("-novid")) extraArgs = extraArgs + " -novid";
         String argv = extraArgs;
-        if (isTc) argv = argv + " -game " + tcDir;
 
-        // native panel resolution — the engine renders at the SDL surface size
-        DisplayMetrics dm = new DisplayMetrics();
-        try {
-            act.getWindowManager().getDefaultDisplay().getRealMetrics(dm);
-        } catch (Throwable t) {
-            act.getWindowManager().getDefaultDisplay().getMetrics(dm);
-        }
-        int w = Math.max(dm.widthPixels, dm.heightPixels);
-        int h = Math.min(dm.widthPixels, dm.heightPixels);
+        // The new engine takes env vars through the "env" pref (KEY=VALUE).
+        // Regal-era knobs are gone; keep it empty unless the user sets one.
+        String env = hsg.getString("engine_env", "").trim();
 
         SharedPreferences p = act.getSharedPreferences(PREFS, Activity.MODE_PRIVATE);
         p.edit()
                 .putString("gamepath", ModScanner.ROOT)
                 .putString("argv", argv)
                 .putString("env", env)
-                .putInt("game", idx)
-                .putBoolean("show_touch", true)
-                .putInt("resolution_width", w)
-                .putInt("resolution_height", h)
-                .putBoolean("fixed_resolution", false) // native resolution, always
                 .putBoolean("immersive_mode", true)
-                .putBoolean("use_volume_buttons", false)
                 .apply();
 
-        // engine-side statics must exist before SDLActivity.onCreate
-        G100Bridge.prepare(act, w, h);
+        // engine-side statics (LauncherActivity.PKG_NAME) before SDLActivity
+        G100Bridge.prepare(act);
 
-        Log.i(TAG, "engine launch: game=" + gameDir + " idx=" + idx
-                + " argv=" + argv + " res=" + w + "x" + h);
+        // touch-UI VPK: extract assets/extras_dir.vpk -> filesDir (first run)
+        String vpkPath = "";
+        try {
+            me.nillerusr.ExtractAssets.extractVPK(act, false);
+            vpkPath = act.getFilesDir().getPath() + "/" + me.nillerusr.ExtractAssets.VPK_NAME;
+        } catch (Throwable t) {
+            Log.w(TAG, "extractVPK failed: " + t);
+        }
 
-        // crash-report pipeline (v0.4.1): prove how far the launch got
+        Log.i(TAG, "engine launch: game=" + gameDir + " argv=" + argv + " vpk=" + vpkPath);
+
+        // crash-report pipeline: prove how far the launch got
         LogStore.writeLaunchMarker(act, "launch " + new java.util.Date()
-                + "\ngame=" + gameDir + " idx=" + idx
+                + "\nengine=" + ENGINE_ID
+                + "\ngame=" + gameDir
                 + "\nargv=" + argv
                 + "\nenv=" + env
                 + "\nroot=" + ModScanner.ROOT
-                + "\nprefs=mod (gamepath,argv,env,game,show_touch,res,fixed,immersive)");
+                + "\nvpk=" + vpkPath);
 
-        // v0.4.2: mark the run so a killed process is detected on next boot,
-        // then arm the hang watchdog — SIGKILL leaves no trace of its own,
-        // the dumps it takes are the ONLY evidence an ANR produces.
+        // run-state marker + hang watchdog: SIGKILL leaves no trace of its own
         SharedPreferencesEngine.markEngineStart(act);
         Watchdog.arm(act);
-
         LogStore.captureLogcat(act);
 
         Intent it = new Intent(act, org.libsdl.app.SDLActivity.class);
         it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        it.putExtra("gamedir", gameDir);
+        it.putExtra("argv", argv);
+        // bundled HL2 client/server game code (Tier-2 fallback for TCs)
+        it.putExtra("gamelibdir", act.getApplicationInfo().nativeLibraryDir);
+        if (!vpkPath.isEmpty()) it.putExtra("vpk", vpkPath);
         act.startActivity(it);
     }
 }
