@@ -18,7 +18,7 @@ import android.content.SharedPreferences;
  * never shut down cleanly = capture post-mortem logcat NOW (the kill traces
  * are still in the ring buffer at that point).
  */
-final class SharedPreferencesEngine {
+public final class SharedPreferencesEngine {
 
     private static final String PREFS = "runstate";
     private static final String K_RUN = "run";          // "", "launcher", "engine"
@@ -32,7 +32,7 @@ final class SharedPreferencesEngine {
     }
 
     /** Called at every process start (before anything else logs). */
-    static void markAppStart(Context ctx) {
+    public static void markAppStart(Context ctx) {
         prefs(ctx).edit()
                 .putLong(K_LAST_START, System.currentTimeMillis())
                 .commit();
@@ -47,12 +47,12 @@ final class SharedPreferencesEngine {
     }
 
     /** Engine activity is going up; a clean teardown must call markEngineEnd. */
-    static void markEngineStart(Context ctx) {
+    public static void markEngineStart(Context ctx) {
         prefs(ctx).edit().putString(K_RUN, "engine").commit();
     }
 
     /** Clean engine shutdown (onDestroy without a kill). */
-    static void markEngineEnd(Context ctx) {
+    public static void markEngineEnd(Context ctx) {
         prefs(ctx).edit().putString(K_RUN, "").commit();
     }
 }

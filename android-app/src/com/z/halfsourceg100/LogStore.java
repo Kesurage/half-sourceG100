@@ -34,6 +34,66 @@ public final class LogStore {
 
     private LogStore() {}
 
+    // --------------------------------------------------------------- cleanup --
+
+    /**
+     * v0.6.6 — the log-handler bloat fix. Field complaint (Nov 28): every
+     * launch captured a fresh logcat-*.txt (up to 256 KB), every killed run
+     * a postmortem-*.txt (up to 256 KB), and NOTHING was ever deleted —
+     * after a day of testing the folder held every session since install,
+     * and the diagnostics zip bundled it all ("bundles the old log,
+     * increasing the size").
+     *
+     * Called once per app start (after the post-mortem capture, so evidence
+     * of the just-killed run survives):
+     *   - logcat-*.txt     keep the newest 1, delete the rest
+     *   - postmortem-*.txt keep the newest 2, delete the rest
+     *   - hsg100-logs-*.zip keep the newest 1, delete the rest
+     *   - crash.txt        truncate to the last 64 KB when it grows beyond it
+     *   - watchdog.txt     delete when older than 12 h (it self-replaces
+     *                      at the first dump of each session anyway)
+     */
+    public static void cleanupAtLaunch(Context ctx) {
+        try {
+            File dir = logDir(ctx);
+            // logcat dumps: only the newest one has value (the current
+            // session is captured fresh at launch anyway)
+            pruneNewest(dir, "logcat-", ".txt", 1);
+            // post-mortems: the previous run's kill evidence + one spare
+            pruneNewest(dir, "postmortem-", ".txt", 2);
+            // user-exported zips: keep one spare
+            pruneNewest(dir, "hsg100-logs-", ".zip", 1);
+
+            File crash = new File(dir, "crash.txt");
+            if (crash.isFile() && crash.length() > 64 * 1024) {
+                String t = tail(crash);
+                java.io.FileWriter w = new java.io.FileWriter(crash, false);
+                w.write(t);
+                w.close();
+            }
+
+            File wd = new File(dir, "watchdog.txt");
+            if (wd.isFile()
+                    && System.currentTimeMillis() - wd.lastModified() > 12L * 60 * 60 * 1000) {
+                //noinspection ResultOfMethodCallIgnored
+                wd.delete();
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "log cleanup failed: " + t);
+        }
+    }
+
+    /** Delete all but the newest {@code keep} files named prefix*suffix. */
+    private static void pruneNewest(File dir, String prefix, String suffix, int keep) {
+        File[] files = dir.listFiles((d, n) -> n.startsWith(prefix) && n.endsWith(suffix));
+        if (files == null || files.length <= keep) return;
+        Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
+        for (int i = keep; i < files.length; i++) {
+            //noinspection ResultOfMethodCallIgnored
+            files[i].delete();
+        }
+    }
+
     // ------------------------------------------------------------- dirs ----
 
     /** /sdcard/srceng/logs when shared storage is writable, else app dir. */
@@ -282,9 +342,13 @@ public final class LogStore {
     }
 
     /**
-     * v0.4.2: bundle every log (including the engine console.log) into one
-     * zip next to the logs, so a single share produces the exact attachment
-     * a bug report needs. Returns the zip, or null on failure.
+     * v0.4.2: bundle the CURRENT session's logs (including the engine
+     * console.log) into one zip next to the logs, so a single share
+     * produces the exact attachment a bug report needs.
+     *
+     * v0.6.6: session-scoped — files not touched in the last 3 hours are
+     * skipped (this is the "stop bundling old logs" fix; the launch-time
+     * cleanup bounds the folder as well).
      */
     public static File zipAll(Context ctx) {
         try {
@@ -296,9 +360,13 @@ public final class LogStore {
             java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
                     new java.io.FileOutputStream(zip));
             byte[] buf = new byte[8192];
+            long freshCutoff = System.currentTimeMillis() - 3L * 60 * 60 * 1000;
             for (LogEntry e : listLogs(ctx)) {
                 try {
                     if (e.file.equals(zip) || !e.file.isFile()) continue;
+                    boolean marker = e.file.getName().equals("engine-last.txt")
+                            || e.file.getName().equals("gameinfo.last.txt");
+                    if (!marker && e.file.lastModified() < freshCutoff) continue; // stale
                     zos.putNextEntry(new java.util.zip.ZipEntry(e.file.getName()));
                     try (java.io.FileInputStream in = new java.io.FileInputStream(e.file)) {
                         int n;

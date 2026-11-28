@@ -36,7 +36,7 @@ public final class Watchdog {
     private static final String TAG = "half-sourceG100";
     private static final long FIRST_DUMP_MS = 15_000;
     private static final long SECOND_DUMP_MS = 45_000;
-    private static final int LOGCAT_TAIL_LINES = 1500;
+    private static final int LOGCAT_TAIL_LINES = 800; // v0.6.6: 1500 -> 800 (log-size complaint)
 
     private static Thread wd;
     /** game dir of the current launch ("hl2" or the TC) — v0.6.4. */
@@ -104,9 +104,11 @@ public final class Watchdog {
         //    the old 400-line tail was 100% BLAST spam, hiding every useful
         //    line. The count is itself the key renderer diagnostic: it is the
         //    number of vsyncs the engine left the surface starving.
+        //    v0.6.6: "eglSwapBuffersWithDamageKHRImpl: error 300d
+        //    (EGL_BAD_SURFACE)" lines are collapsed and counted the same way.
         String lc = logcatTail();
         if (lc != null) s.append("\n----- logcat tail (last ")
-                .append(LOGCAT_TAIL_LINES).append(" lines, BLASTBufferQueue spam collapsed) -----\n")
+                .append(LOGCAT_TAIL_LINES).append(" lines, spam collapsed) -----\n")
                 .append(lc);
 
         // 3. the engine's own console.log, if it exists by now — read from
@@ -132,6 +134,46 @@ public final class Watchdog {
         } catch (IOException e) {
             Log.w(TAG, "watchdog dump failed: " + e);
         }
+
+        // 4. v0.6.6 renderer-death check — see SDLActivity.requestRendererRecovery().
+        //    Every swap of a dead EGL window logs EGL_BAD_SURFACE; a starved
+        //    visible surface floods NO_BUFFER_AVAILABLE. Both mean "engine
+        //    alive, screen permanently black" — restart before the user has
+        //    to fight a frozen app. Thresholds: dump #1 (T+15s) tolerates the
+        //    normal pre-first-frame window (splash timeout + menu init can
+        //    starve the surface for a few seconds on slow storage); dump #2
+        //    (T+45s) expects a long-stable picture.
+        if (lastBlastCount >= 0 || lastEglBadCount >= 0) {
+            boolean dead = false;
+            String why = "";
+            if (lastEglBadCount >= 8) {
+                dead = true;
+                why = lastEglBadCount + " EGL_BAD_SURFACE swap failures";
+            } else if (seq == 1 ? lastBlastCount >= 200 : lastBlastCount >= 60) {
+                dead = true;
+                why = lastBlastCount + " vsyncs with NO buffer presented";
+            }
+            if (dead) {
+                Log.e(TAG, "watchdog: dead-renderer signature (" + why
+                        + ") — requesting renderer recovery");
+                boolean scheduled = false;
+                try {
+                    scheduled = org.libsdl.app.SDLActivity.isEngineRunning()
+                            && org.libsdl.app.SDLActivity.requestRendererRecovery(why);
+                } catch (Throwable t) {
+                    Log.w(TAG, "renderer recovery call failed: " + t);
+                }
+                try {
+                    FileWriter w = new FileWriter(out, true);
+                    w.write("\n[watchdog] dead-renderer signature: " + why
+                            + " — recovery " + (scheduled ? "scheduled (engine restart)"
+                                    : "NOT scheduled (engine not running or budget spent)")
+                            + "\n");
+                    w.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
     }
 
     private static String threadDump() {
@@ -153,6 +195,10 @@ public final class Watchdog {
         return sw.toString();
     }
 
+    /** Counts from the last logcatTail() call — set before the renderer check. */
+    private static volatile int lastBlastCount = -1;
+    private static volatile int lastEglBadCount = -1;
+
     private static String logcatTail() {
         try {
             // v0.6.5: buffers main+system only, pid-filtered to this
@@ -172,24 +218,35 @@ public final class Watchdog {
             p.waitFor();
             String raw = bo.toString("UTF-8");
 
-            // v0.6.4: collapse the BLASTBufferQueue flood to one summary line —
-            // a black-screen (no frames presented) launch produces hundreds
-            // of these per second and they otherwise evict every useful line
-            // from the tail.
+            // v0.6.4/6.6: collapse the diagnostic floods (BLAST NO_BUFFER +
+            // EGL_BAD_SURFACE) to one summary line each — a black-screen
+            // launch produces hundreds of these per second and they would
+            // otherwise evict every useful line from the tail.
             StringBuilder sb = new StringBuilder();
-            int blast = 0;
+            int blast = 0, eglbad = 0;
             for (String line : raw.split("\n")) {
                 if (line.contains("BLASTBufferQueue")
                         && line.contains("NO_BUFFER_AVAILABLE")) {
                     blast++;
                     continue;
                 }
+                if (line.contains("eglSwapBuffers") && line.contains("EGL_BAD_SURFACE")) {
+                    eglbad++;
+                    continue;
+                }
                 sb.append(line).append('\n');
+            }
+            lastBlastCount = blast;
+            lastEglBadCount = eglbad;
+            if (eglbad > 0) {
+                sb.insert(0, "[hsg100: " + eglbad + " eglSwapBuffers EGL_BAD_SURFACE lines"
+                        + " collapsed — ANY nonzero means the engine is swapping into a"
+                        + " destroyed surface (permanent black screen)]\n");
             }
             if (blast > 0) {
                 sb.insert(0, "[hsg100: " + blast + " BLASTBufferQueue NO_BUFFER_AVAILABLE"
-                        + " lines collapsed — nonzero means the engine presented NO frames"
-                        + " to the visible surface in this window]\n");
+                        + " lines collapsed — sustained high counts mean the engine"
+                        + " presented NO frames to the visible surface in this window]\n");
             }
             return sb.toString();
         } catch (Throwable t) {

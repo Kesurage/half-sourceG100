@@ -5,6 +5,52 @@ source-engine fork. Vulkan (panvk on stock kbase) stays the Phase 4
 add-on, never the default. This doc lists what will actually bite us on a
 2-core Valhall GPU with no BCn hardware, and the plan for each.
 
+## CASE CLOSED (v0.6.6): the TC/Lost Coast black screen
+
+The "mod loads but nothing renders" black screen was NOT a GL/Mali problem.
+Field-log forensics (Nov 28, Lost Coast, Infinix Hot 50 4G / Android 14):
+
+- The engine initialized cleanly (fonts, GameUI, map spawn — content mounts
+  from v0.6.3+ all worked).
+- At T+11.7s — exactly when the map/background-map spawned — Android
+  replaced the SurfaceView's surface (`BLASTBufferQueue ...#2` appears).
+- The engine's first `eglSwapBuffers` after the swap landed 7.5s later and
+  failed with `EGL_BAD_SURFACE` **on every frame until kill**.
+
+SDL 2.0.17 handles a replaced surface only through its native
+pause/backup/resume/restore sequence, which runs inside the engine's event
+pump (`Android_PumpEvents_Blocking`). A Source engine deep in a blocking
+map load swaps loading-screen frames WITHOUT pumping, so the GL context is
+never re-bound (`eglMakeCurrent`) to the rebuilt EGL surface — every swap
+fails, the loading screen shows nothing, the app looks frozen+black.
+
+The v0.6.4/v0.6.5 "surface-stability gate" made this WORSE: by delaying the
+engine start it pushed the first frame past the starting-window timeout, so
+the surface churn reliably landed inside the non-pumping map load.
+
+v0.6.6 fix stack (all launcher-side, engine .so untouched):
+
+1. **Stock engine-start timing** (gate removed) — first frame renders early,
+   the churn happens while the engine is at the menu and pumping, and SDL's
+   own pause/resume machinery recovers invisibly (this is why the original
+   srceng-android app never showed the bug on this device).
+2. **resumeRetry()** (SDLActivity) — if the RESUMED transition was skipped
+   during the churn (transient focus loss), it is retried for 4s; a missed
+   `nativeResume()` would otherwise block the engine thread forever on
+   `Android_ResumeSem`.
+3. **Renderer recovery** (Watchdog + SDLActivity) — the watchdog dumps at
+   T+15s/T+45s now count `EGL_BAD_SURFACE` and `NO_BUFFER_AVAILABLE` lines;
+   the dead-renderer signature triggers a guarded automatic engine restart
+   (max 2 per 10 min) on what is by then a stable surface. SDL 2.0.17 has
+   no Java-reachable way to rebind EGL mid-load; the restart is the only
+   full recovery for a churn-during-map-load event.
+
+Also in v0.6.6: log-handler bloat fix (see `android-app/src/.../LogStore`)
+— old logcat/postmortem/zip files are pruned at every app start, the
+diagnostics zip is session-scoped, crash.txt is capped, watchdog logcat
+tail halved.
+
+
 ## Confirmed problem history on this exact engine/GPU family
 
 | Symptom | Where seen | Read |

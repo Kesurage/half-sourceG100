@@ -48,6 +48,11 @@ public class Hsg100App extends Application {
         // still in the buffer. Must run before anything logs this session.
         LogStore.capturePostMortem(this);
 
+        // v0.6.6: log-handler bloat fix — after the (possible) post-mortem
+        // capture, prune the logs dir so old sessions stop accumulating and
+        // stop being re-bundled by the diagnostics zip.
+        LogStore.cleanupAtLaunch(this);
+
         File dir = LogStore.logDir(this);
         boolean inShared = dir != null
                 && dir.getAbsolutePath().startsWith("/sdcard");

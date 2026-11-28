@@ -126,151 +126,180 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     protected static Thread mSDLThread;
 
     // ======================================================================
-    // hsg100 v0.6.4 -- surface-stability gate for the engine start
-    // (the "TC mod loads but nothing renders" black-screen fix)
+    // hsg100 v0.6.6 -- renderer lifecycle hardening (the real black-screen
+    // fix; replaces the v0.6.4/v0.6.5 surface-stability gate + rebind kick,
+    // which made things WORSE -- see below).
     //
-    // What the on-device logs show for every -game <tc> launch since
-    // v0.6.0: the engine thread starts on the FIRST ready surface, then
-    // Android DESTROYS and RE-CREATES that surface during the
-    // portrait->landscape settle (SurfaceView queue #1 -> #2, visible as
-    // the endless "BLASTBufferQueue: acquireNextBufferLocked: Failed to
-    // acquire a buffer, err=NO_BUFFER_AVAILABLE" flood in logcat).
-    // SDL 2.0.17 only rebinds its EGL window surface when the engine
-    // pumps the native window events -- and a Source engine that is deep
-    // inside mod init (gameinfo parse, 20+ VPK mounts) does not pump in
-    // time. Every frame is then swapped into the DEAD surface: the
-    // engine stays alive (console advances, menu input and sounds work)
-    // while the screen shows absolutely nothing.
+    // Field-log forensics (Lost Coast + TC mods, Nov 28 device logs):
+    //   T+0    engine starts (gate v2 waited for a "quiet landscape" surface)
+    //   T+10s  menu init done, background map starts loading
+    //   T+11.7s  Android replaces the SurfaceView surface (queue #1 -> #2,
+    //          first "BLASTBufferQueue: NO_BUFFER_AVAILABLE" line)
+    //   T+19s  engine's first eglSwapBuffers -> EGL_BAD_SURFACE, forever
+    //   T+44s  user kills the frozen black app
     //
-    // Fix: never start SDLMain on the first ready surface. Wait until the
-    // surface has stayed unchanged for a quiet window (or a hard timeout
-    // expires), then start the engine -- it binds EGL to the final,
-    // stable window. The gate opens exactly once per activity lifetime;
-    // later pause/resume cycles use the normal nativeResume() path.
+    // SDL 2.0.17 DOES handle a replaced surface -- but only through its
+    // pause/backup/resume/restore sequence, which runs INSIDE THE ENGINE'S
+    // EVENT PUMP (Android_PumpEvents_Blocking, on the engine thread).
+    // During a long blocking map load the engine swaps frames (loading
+    // screen) WITHOUT pumping, so:
+    //   - the EGL window surface is destroyed and rebuilt on the new
+    //     ANativeWindow by onNativeSurfaceDestroyed/Created/Changed, but
+    //   - the GL context is never re-bound (eglMakeCurrent) to the new
+    //     surface -- that only happens in android_egl_context_restore(),
+    //     which needs the pump.
+    // Every swap then fails with EGL_BAD_SURFACE: permanent black screen
+    // with a live, "loading" engine.
+    //
+    // The original srceng-android app survives the same device because it
+    // starts the engine on the FIRST ready surface -- the menu renders its
+    // first frame early, the starting-window/surface churn happens while
+    // the engine is at the menu (pumping every frame), and the native
+    // pause/resume machinery recovers the surface invisibly.
+    //
+    // v0.6.6 therefore:
+    //   1. REMOVES the gate entirely -- stock SDL timing, like the original.
+    //   2. Adds resumeRetry() -- if the RESUMED transition could not run at
+    //      surfaceChanged time (focus lost during the swap), it is retried;
+    //      a missed nativeResume() would otherwise block the engine thread
+    //      forever on Android_ResumeSem.
+    //   3. Adds requestRendererRecovery() -- a last-resort watchdog-driven
+    //      process restart for the case where the recreation lands inside a
+    //      non-pumping map load. SDL 2.0.17 cannot rebind EGL from Java;
+    //      a clean restart on the (by then stable) surface is the only full
+    //      recovery. The Watchdog detects the dead-render signature
+    //      (EGL_BAD_SURFACE spam / NO_BUFFER flood) and calls this.
     // ======================================================================
-    // v0.6.5 (gate v2): the v0.6.4 quiet-window was NOT enough. Field logs
-    // show the engine starting while the window config was still the
-    // portrait one; the rotation then swaps the SurfaceView surface (queue
-    // #1 -> #2) and the engine swaps every frame into the dead window.
-    // The gate now ALSO requires a LANDSCAPE surface (w > h) before the
-    // first engine start. Hard timeout doubled: a device that never
-    // reports landscape (split screen, foldables) still launches.
-    protected static boolean mSurfaceStableGateDone = false;
-    protected static boolean mSurfaceStablePending = false;
-    protected static long mFirstSurfaceReadyAt = 0L;
-    protected static long mLastSurfaceEventAt = 0L;
-    protected static int mStableSurfaceW = 0, mStableSurfaceH = 0;
-    protected static final long SURFACE_STABLE_QUIET_MS = 700L;
-    protected static final long SURFACE_STABLE_MAX_WAIT_MS = 7000L;
-    protected static android.os.Handler mSurfaceStableHandler = null;
+    protected static boolean mResumeRetryPending = false;
 
-    // v0.6.5: the rebind kick. If the surface changes AFTER the engine
-    // started (the rotation settle finishing late, or the system recreating
-    // the SurfaceView), the engine's EGL window surface keeps pointing at
-    // the OLD ANativeWindow: the console advances, menu input and sounds
-    // work, and the compositor reports 'NO_BUFFER_AVAILABLE' forever --
-    // the screen stays black. A nativeResume() is exactly what a real
-    // pause/resume does, and SDL 2.0.17 rebuilds the EGL surface on the
-    // CURRENT window in that path. We fire it once after the new surface
-    // has been quiet for a moment.
-    protected static boolean mRebindKickPending = false;
-
-    /** Any surface lifecycle event resets the quiet window. */
-    protected static void noteSurfaceEvent() {
-        mLastSurfaceEventAt = android.os.SystemClock.uptimeMillis();
-    }
-
-    /** Surface dimensions, recorded by surfaceChanged for the gate. */
-    protected static void noteSurfaceSize(int w, int h) {
-        mStableSurfaceW = w;
-        mStableSurfaceH = h;
-    }
-
-    /** True when the current surface is landscape (the engine's only sane orientation). */
-    protected static boolean surfaceIsLandscape() {
-        return mStableSurfaceW > mStableSurfaceH;
+    /**
+     * True once the native engine thread has been started (SDLMain running).
+     */
+    public static boolean isEngineRunning() {
+        return mSDLThread != null && mSDLThread.isAlive();
     }
 
     /**
-     * Open the surface-stability gate once the surface has been quiet AND
-     * landscape (or the hard timeout expired), then re-run the state
-     * machine so the engine thread starts on the FINAL surface.
+     * v0.6.6: after a surface change under a running engine, the RESUMED
+     * transition (nativeResume) must eventually run or the engine thread
+     * blocks forever inside Android_PumpEvents_Blocking. surfaceChanged()
+     * already tries once, but its attempt is skipped when focus or the
+     * surface-ready flag was transiently false (that is exactly what a
+     * mid-recreation window relayout causes on some devices). Retry a
+     * couple of times with a settle delay.
      */
-    protected static void requestStableEngineStart() {
-        final long now = android.os.SystemClock.uptimeMillis();
-        if (mFirstSurfaceReadyAt == 0L) {
-            mFirstSurfaceReadyAt = now;
+    protected static void resumeRetry() {
+        if (!isEngineRunning()) {
+            return; // engine not up: the normal state machine applies
         }
-        if (mSurfaceStableHandler == null) {
-            mSurfaceStableHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-        }
-
-        if (mSurfaceStableGateDone) {
+        if (mResumeRetryPending) {
             return;
         }
-
-        final long quietFor = now - mLastSurfaceEventAt;
-        final long waited = now - mFirstSurfaceReadyAt;
-        final boolean quiet = quietFor >= SURFACE_STABLE_QUIET_MS;
-        final boolean landscape = surfaceIsLandscape();
-        if ((quiet && landscape) || waited >= SURFACE_STABLE_MAX_WAIT_MS) {
-            Log.v(TAG, "hsg100: surface stable after " + waited + " ms ("
-                    + mStableSurfaceW + "x" + mStableSurfaceH + ", landscape=" + landscape
-                    + ") -- starting engine");
-            mSurfaceStableGateDone = true;
-            mSurfaceStablePending = false;
-            handleNativeState();
-            return;
-        }
-
-        if (mSurfaceStablePending) {
-            return; // a re-check is already scheduled
-        }
-        mSurfaceStablePending = true;
-        long delay = Math.min(SURFACE_STABLE_QUIET_MS - quietFor,
-                              SURFACE_STABLE_MAX_WAIT_MS - waited);
-        if (delay < 50L) delay = 50L;
-        mSurfaceStableHandler.postDelayed(new Runnable() {
+        mResumeRetryPending = true;
+        final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+        final Runnable retry = new Runnable() {
+            int attempts = 0;
             @Override
             public void run() {
-                mSurfaceStablePending = false;
-                requestStableEngineStart();
-            }
-        }, delay);
-    }
-
-    /**
-     * v0.6.5 rebind kick: called when the surface settles AFTER the engine
-     * already started. One nativeResume() after the quiet window forces SDL
-     * to rebuild the EGL window surface on the current ANativeWindow.
-     */
-    protected static void scheduleRebindKick() {
-        if (!mSurfaceStableGateDone || mSDLThread == null) {
-            return; // engine not started yet -- the gate handles binding
-        }
-        if (mRebindKickPending) {
-            return;
-        }
-        mRebindKickPending = true;
-        Log.v(TAG, "hsg100: surface changed after engine start -- rebind kick armed");
-        if (mSurfaceStableHandler == null) {
-            mSurfaceStableHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-        }
-        mSurfaceStableHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                mRebindKickPending = false;
-                if (mSDLThread == null || mSingleton == null) {
+                if (!isEngineRunning()) {
+                    mResumeRetryPending = false;
                     return;
                 }
-                Log.v(TAG, "hsg100: rebind kick -- nativeResume() to rebuild EGL surface");
-                try {
-                    nativeResume();
-                } catch (Throwable t) {
-                    Log.w(TAG, "hsg100: rebind kick failed: " + t);
+                if (mCurrentNativeState != NativeState.RESUMED) {
+                    Log.v(TAG, "hsg100: resumeRetry -- re-running state machine ("
+                            + mCurrentNativeState + " -> " + mNextNativeState + ")");
+                    mNextNativeState = NativeState.RESUMED;
+                    handleNativeState();
+                }
+                attempts++;
+                if (mCurrentNativeState != NativeState.RESUMED && attempts < 4) {
+                    h.postDelayed(this, 1000L); // 1s, 2s, 3s, 4s after the change
+                } else {
+                    mResumeRetryPending = false;
                 }
             }
-        }, SURFACE_STABLE_QUIET_MS);
+        };
+        h.postDelayed(retry, 250L);
+    }
+
+    /**
+     * v0.6.6 last-resort renderer recovery. The watchdog calls this when the
+     * engine is running but every frame fails (dead EGL surface -- see the
+     * block comment above). SDL 2.0.17 has no Java-reachable way to rebind
+     * the GL context to the new surface while the engine is blocked in a
+     * map load, so the only full recovery is a process restart on what is
+     * by now a stable window. Guarded: at most 2 automatic restarts per
+     * 10 minutes, or we would fight a really broken session in a loop.
+     *
+     * @return true when a restart was scheduled
+     */
+    public static boolean requestRendererRecovery(String reason) {
+        final SDLActivity act = mSingleton;
+        if (act == null) {
+            return false;
+        }
+        try {
+            final android.content.Context ctx = act.getApplicationContext();
+            final android.content.SharedPreferences sp =
+                    ctx.getSharedPreferences("hsg100", android.content.Context.MODE_PRIVATE);
+            final long now = android.os.SystemClock.elapsedRealtime();
+            long windowStart = sp.getLong("recovery_window", 0L);
+            int count = sp.getInt("recovery_count", 0);
+            if (now - windowStart > 10L * 60 * 1000) { // new 10-minute window
+                windowStart = now;
+                count = 0;
+            }
+            if (count >= 2) {
+                Log.e(TAG, "hsg100: renderer recovery requested but the restart "
+                        + "budget is spent (" + reason + ") -- leaving the engine "
+                        + "as-is; collect logs via the launcher diagnostics");
+                return false;
+            }
+            sp.edit().putLong("recovery_window", windowStart)
+                    .putInt("recovery_count", count + 1).commit();
+
+            // Re-launch THIS activity with the exact same launch extras.
+            android.content.Intent src = act.getIntent();
+            android.content.Intent relaunch = new android.content.Intent(ctx, SDLActivity.class);
+            relaunch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (src != null && src.getExtras() != null) {
+                relaunch.putExtras(src.getExtras());
+            }
+            me.nillerusr.G100Bridge.prepare(ctx); // PKG_NAME static for the engine glue
+
+            android.app.AlarmManager am = (android.app.AlarmManager)
+                    ctx.getSystemService(android.content.Context.ALARM_SERVICE);
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
+                    ctx, 0, relaunch,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                            | android.app.PendingIntent.FLAG_IMMUTABLE);
+            // setAndAllowWhileIdle: no SCHEDULE_EXACT_ALARM permission needed,
+            // fires within a few seconds even in doze.
+            am.setAndAllowWhileIdle(android.app.AlarmManager.RTC,
+                    System.currentTimeMillis() + 1500L, pi);
+
+            // Tell the log pipeline this is a PLANNED restart (no post-mortem
+            // capture, no stale-log bundling on the next boot).
+            try {
+                com.z.halfsourceg100.SharedPreferencesEngine.markEngineEnd(ctx);
+                com.z.halfsourceg100.LogStore.writeLaunchMarker(ctx,
+                        "renderer-recovery restart " + new java.util.Date()
+                        + "\nreason=" + reason
+                        + "\nrestart=" + (count + 1) + " in this window");
+            } catch (Throwable ignored) {
+                // never let diagnostics break the recovery itself
+            }
+
+            Log.e(TAG, "hsg100: renderer dead (" + reason + ") -- restarting engine "
+                    + "process (restart " + (count + 1) + "/2 in 10 min)");
+            act.finish();
+            android.os.Process.killProcess(android.os.Process.myPid());
+            System.exit(0);
+            return true;
+        } catch (Throwable t) {
+            Log.e(TAG, "hsg100: renderer recovery failed: " + t);
+            return false;
+        }
     }
 
     protected static SDLGenericMotionListener_API12 getMotionListener() {
@@ -545,6 +574,21 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
                 Log.v(TAG, "Got filename: " + filename);
                 SDLActivity.onNativeDropFile(filename);
             }
+        }
+
+        // hsg100 v0.6.6: (re-)arm the hang/dead-render watchdog HERE, from
+        // the launch extras. Normal launches already arm it via the launcher
+        // (EngineHost) — this re-arm only resets the dump timers slightly.
+        // The point is the renderer-recovery RESTART path: it relaunches
+        // this activity directly (alarm), bypassing the launcher, and the
+        // restarted session needs its own watchdog in case the replacement
+        // surface dies too.
+        try {
+            String gd = intent != null ? intent.getStringExtra("gamedir") : null;
+            com.z.halfsourceg100.Watchdog.arm(this,
+                    gd == null || gd.isEmpty() ? "hl2" : gd);
+        } catch (Throwable t) {
+            Log.w(TAG, "hsg100: watchdog arm failed: " + t);
         }
     }
 
@@ -841,21 +885,17 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         if (mNextNativeState == NativeState.RESUMED) {
             if (mSurface.mIsSurfaceReady && mHasFocus && mIsResumedCalled) {
                 if (mSDLThread == null) {
-                    // hsg100 v0.6.4: first engine start goes through the
-                    // surface-stability gate -- see the comment block at the
-                    // mSDLThread field. Returning here without transitioning
-                    // keeps the state machine pending; the gate re-invokes
-                    // handleNativeState() when the surface is stable.
-                    if (!mSurfaceStableGateDone) {
-                        noteSurfaceEvent(); // count this ready-signal itself
-                        requestStableEngineStart();
-                        return;
-                    }
-
                     // This is the entry point to the C app.
                     // Start up the C app thread and enable sensor input for the first time
                     // FIXME: Why aren't we enabling sensor input at start?
 
+                    // hsg100 v0.6.6: the v0.6.4/v0.6.5 surface-stability gate
+                    // used to hold the engine start here. It DELAYED the first
+                    // frame past the starting-window timeout, which pushed the
+                    // surface recreation into the non-pumping map load -- the
+                    // exact black-screen it tried to prevent. Stock timing is
+                    // what the original engine app uses; keep it (the new
+                    // renderer recovery in the Watchdog covers the rest).
                     mSDLThread = new Thread(new SDLMain(), "SDLThread");
                     mSurface.enableSensor(Sensor.TYPE_ACCELEROMETER, true);
                     mSDLThread.start();
@@ -1988,7 +2028,6 @@ class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         Log.v("SDL", "surfaceCreated()");
-        SDLActivity.noteSurfaceEvent();
         SDLActivity.onNativeSurfaceCreated();
     }
 
@@ -1996,7 +2035,6 @@ class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         Log.v("SDL", "surfaceDestroyed()");
-        SDLActivity.noteSurfaceEvent();
 
         // Transition to pause, if needed
         SDLActivity.mNextNativeState = SDLActivity.NativeState.PAUSED;
@@ -2011,12 +2049,13 @@ class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     public void surfaceChanged(SurfaceHolder holder,
                                int format, int width, int height) {
         Log.v("SDL", "surfaceChanged()");
-        SDLActivity.noteSurfaceEvent();
-        SDLActivity.noteSurfaceSize(width, height);
-        // v0.6.5: if the engine is already running and the surface moved
-        // under it (late rotation settle), fire the rebind kick once the
-        // new surface is quiet. Harmless no-op when sizes did not change.
-        SDLActivity.scheduleRebindKick();
+        // v0.6.6: a surface change under a RUNNING engine means Android
+        // replaced the window surface. SDL's native side rebuilds the EGL
+        // surface in onNativeSurfaceChanged(), but the GL context rebind
+        // needs the engine's event pump to see the resume semaphore. If the
+        // RESUMED transition below is skipped (transient focus loss is the
+        // classic cause), retry it -- see resumeRetry() up in SDLActivity.
+        SDLActivity.resumeRetry();
 
         if (SDLActivity.mSingleton == null) {
             return;
