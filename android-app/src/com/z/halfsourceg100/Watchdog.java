@@ -36,20 +36,29 @@ public final class Watchdog {
     private static final String TAG = "half-sourceG100";
     private static final long FIRST_DUMP_MS = 15_000;
     private static final long SECOND_DUMP_MS = 45_000;
-    private static final int LOGCAT_TAIL_LINES = 400;
+    private static final int LOGCAT_TAIL_LINES = 1500;
 
     private static Thread wd;
+    /** game dir of the current launch ("hl2" or the TC) — v0.6.4. */
+    private static volatile String gameDir = "hl2";
 
     private Watchdog() {}
 
-    /** Arm (or re-arm) the watchdog right before startActivity(engine). */
-    public static synchronized void arm(Context ctx) {
+    /**
+     * Arm (or re-arm) the watchdog right before startActivity(engine).
+     * v0.6.4: takes the game dir so the console.log tail is read from the
+     * directory the engine ACTUALLY writes it to (a TC launch writes
+     * <tc>/console.log — v0.6.3 read hl2/console.log and showed stale
+     * output from an older session).
+     */
+    public static synchronized void arm(Context ctx, String dir) {
         cancel();
+        gameDir = dir == null || dir.isEmpty() ? "hl2" : dir;
         final Context app = ctx.getApplicationContext();
         wd = new Thread(() -> run(app), "hsg100-watchdog");
         wd.setDaemon(true);
         wd.start();
-        Log.i(TAG, "watchdog armed (dumps at +" + (FIRST_DUMP_MS / 1000)
+        Log.i(TAG, "watchdog armed for " + gameDir + " (dumps at +" + (FIRST_DUMP_MS / 1000)
                 + "s and +" + (SECOND_DUMP_MS / 1000) + "s after launch)");
     }
 
@@ -89,18 +98,29 @@ public final class Watchdog {
         // 1. every Java thread, with its exact suspended line
         s.append(threadDump());
 
-        // 2. logcat tail (native side may have logged its last words)
+        // 2. logcat tail (native side may have logged its last words).
+        //    v0.6.4: BLASTBufferQueue "NO_BUFFER_AVAILABLE" lines are counted
+        //    and collapsed — on a black-screen launch they flood at ~300/s and
+        //    the old 400-line tail was 100% BLAST spam, hiding every useful
+        //    line. The count is itself the key renderer diagnostic: it is the
+        //    number of vsyncs the engine left the surface starving.
         String lc = logcatTail();
         if (lc != null) s.append("\n----- logcat tail (last ")
-                .append(LOGCAT_TAIL_LINES).append(" lines) -----\n").append(lc);
+                .append(LOGCAT_TAIL_LINES).append(" lines, BLASTBufferQueue spam collapsed) -----\n")
+                .append(lc);
 
-        // 3. the engine's own console.log, if it exists by now
-        File consoleLog = new File(ModScanner.ROOT + "/hl2", "console.log");
+        // 3. the engine's own console.log, if it exists by now — read from
+        //    the ACTIVE game dir first (v0.6.4), hl2 as the fallback
+        File consoleLog = new File(new File(ModScanner.ROOT, gameDir), "console.log");
+        if (!consoleLog.isFile())
+            consoleLog = new File(ModScanner.ROOT + "/hl2", "console.log");
         if (consoleLog.isFile()) {
-            s.append("\n----- engine console.log tail -----\n")
+            s.append("\n----- engine console.log tail (")
+                    .append(consoleLog.getParentFile().getName())
+                    .append("/console.log) -----\n")
                     .append(LogStore.tail(consoleLog));
         } else {
-            s.append("\n----- engine console.log: not created yet -----\n");
+            s.append("\n----- engine console.log: not created yet (" + gameDir + ") -----");
         }
 
         File out = new File(LogStore.logDir(app), "watchdog.txt");
@@ -144,7 +164,28 @@ public final class Watchdog {
             int n;
             while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
             p.waitFor();
-            return bo.toString("UTF-8");
+            String raw = bo.toString("UTF-8");
+
+            // v0.6.4: collapse the BLASTBufferQueue flood to one summary line —
+            // a black-screen (no frames presented) launch produces hundreds
+            // of these per second and they otherwise evict every useful line
+            // from the tail.
+            StringBuilder sb = new StringBuilder();
+            int blast = 0;
+            for (String line : raw.split("\n")) {
+                if (line.contains("BLASTBufferQueue")
+                        && line.contains("NO_BUFFER_AVAILABLE")) {
+                    blast++;
+                    continue;
+                }
+                sb.append(line).append('\n');
+            }
+            if (blast > 0) {
+                sb.insert(0, "[hsg100: " + blast + " BLASTBufferQueue NO_BUFFER_AVAILABLE"
+                        + " lines collapsed — nonzero means the engine presented NO frames"
+                        + " to the visible surface in this window]\n");
+            }
+            return sb.toString();
         } catch (Throwable t) {
             return "(logcat tail failed: " + t + ")";
         }

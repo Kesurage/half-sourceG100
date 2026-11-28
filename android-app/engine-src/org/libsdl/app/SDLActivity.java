@@ -125,6 +125,86 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     // This is what SDL runs in. It invokes SDL_main(), eventually
     protected static Thread mSDLThread;
 
+    // ======================================================================
+    // hsg100 v0.6.4 -- surface-stability gate for the engine start
+    // (the "TC mod loads but nothing renders" black-screen fix)
+    //
+    // What the on-device logs show for every -game <tc> launch since
+    // v0.6.0: the engine thread starts on the FIRST ready surface, then
+    // Android DESTROYS and RE-CREATES that surface during the
+    // portrait->landscape settle (SurfaceView queue #1 -> #2, visible as
+    // the endless "BLASTBufferQueue: acquireNextBufferLocked: Failed to
+    // acquire a buffer, err=NO_BUFFER_AVAILABLE" flood in logcat).
+    // SDL 2.0.17 only rebinds its EGL window surface when the engine
+    // pumps the native window events -- and a Source engine that is deep
+    // inside mod init (gameinfo parse, 20+ VPK mounts) does not pump in
+    // time. Every frame is then swapped into the DEAD surface: the
+    // engine stays alive (console advances, menu input and sounds work)
+    // while the screen shows absolutely nothing.
+    //
+    // Fix: never start SDLMain on the first ready surface. Wait until the
+    // surface has stayed unchanged for a quiet window (or a hard timeout
+    // expires), then start the engine -- it binds EGL to the final,
+    // stable window. The gate opens exactly once per activity lifetime;
+    // later pause/resume cycles use the normal nativeResume() path.
+    // ======================================================================
+    protected static boolean mSurfaceStableGateDone = false;
+    protected static boolean mSurfaceStablePending = false;
+    protected static long mFirstSurfaceReadyAt = 0L;
+    protected static long mLastSurfaceEventAt = 0L;
+    protected static final long SURFACE_STABLE_QUIET_MS = 700L;
+    protected static final long SURFACE_STABLE_MAX_WAIT_MS = 3500L;
+    protected static android.os.Handler mSurfaceStableHandler = null;
+
+    /** Any surface lifecycle event resets the quiet window. */
+    protected static void noteSurfaceEvent() {
+        mLastSurfaceEventAt = android.os.SystemClock.uptimeMillis();
+    }
+
+    /**
+     * Open the surface-stability gate once the surface has been quiet
+     * (or the hard timeout expired), then re-run the state machine so the
+     * engine thread starts on the FINAL surface.
+     */
+    protected static void requestStableEngineStart() {
+        final long now = android.os.SystemClock.uptimeMillis();
+        if (mFirstSurfaceReadyAt == 0L) {
+            mFirstSurfaceReadyAt = now;
+        }
+        if (mSurfaceStableHandler == null) {
+            mSurfaceStableHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+        }
+
+        if (mSurfaceStableGateDone) {
+            return;
+        }
+
+        final long quietFor = now - mLastSurfaceEventAt;
+        final long waited = now - mFirstSurfaceReadyAt;
+        if (quietFor >= SURFACE_STABLE_QUIET_MS || waited >= SURFACE_STABLE_MAX_WAIT_MS) {
+            Log.v(TAG, "hsg100: surface stable after " + waited + " ms -- starting engine");
+            mSurfaceStableGateDone = true;
+            mSurfaceStablePending = false;
+            handleNativeState();
+            return;
+        }
+
+        if (mSurfaceStablePending) {
+            return; // a re-check is already scheduled
+        }
+        mSurfaceStablePending = true;
+        long delay = Math.min(SURFACE_STABLE_QUIET_MS - quietFor,
+                              SURFACE_STABLE_MAX_WAIT_MS - waited);
+        if (delay < 50L) delay = 50L;
+        mSurfaceStableHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                mSurfaceStablePending = false;
+                requestStableEngineStart();
+            }
+        }, delay);
+    }
+
     protected static SDLGenericMotionListener_API12 getMotionListener() {
         if (mMotionListener == null) {
             if (Build.VERSION.SDK_INT >= 26) {
@@ -693,6 +773,17 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         if (mNextNativeState == NativeState.RESUMED) {
             if (mSurface.mIsSurfaceReady && mHasFocus && mIsResumedCalled) {
                 if (mSDLThread == null) {
+                    // hsg100 v0.6.4: first engine start goes through the
+                    // surface-stability gate -- see the comment block at the
+                    // mSDLThread field. Returning here without transitioning
+                    // keeps the state machine pending; the gate re-invokes
+                    // handleNativeState() when the surface is stable.
+                    if (!mSurfaceStableGateDone) {
+                        noteSurfaceEvent(); // count this ready-signal itself
+                        requestStableEngineStart();
+                        return;
+                    }
+
                     // This is the entry point to the C app.
                     // Start up the C app thread and enable sensor input for the first time
                     // FIXME: Why aren't we enabling sensor input at start?
@@ -1829,6 +1920,7 @@ class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         Log.v("SDL", "surfaceCreated()");
+        SDLActivity.noteSurfaceEvent();
         SDLActivity.onNativeSurfaceCreated();
     }
 
@@ -1836,6 +1928,7 @@ class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         Log.v("SDL", "surfaceDestroyed()");
+        SDLActivity.noteSurfaceEvent();
 
         // Transition to pause, if needed
         SDLActivity.mNextNativeState = SDLActivity.NativeState.PAUSED;
@@ -1850,6 +1943,7 @@ class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     public void surfaceChanged(SurfaceHolder holder,
                                int format, int width, int height) {
         Log.v("SDL", "surfaceChanged()");
+        SDLActivity.noteSurfaceEvent();
 
         if (SDLActivity.mSingleton == null) {
             return;

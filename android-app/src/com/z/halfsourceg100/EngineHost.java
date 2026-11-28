@@ -189,7 +189,7 @@ public final class EngineHost {
 
         // run-state marker + hang watchdog: SIGKILL leaves no trace of its own
         SharedPreferencesEngine.markEngineStart(act);
-        Watchdog.arm(act);
+        Watchdog.arm(act, gameDir);
         LogStore.captureLogcat(act);
 
         Intent it = new Intent(act, org.libsdl.app.SDLActivity.class);

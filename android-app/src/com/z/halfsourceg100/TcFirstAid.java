@@ -93,8 +93,15 @@ final class TcFirstAid {
      * content (the v0.6.2 "missing background image" field breakage).
      * Rev 6: the real part-descriptor walk (terminator 0xffff, multi-part
      * entries) — real VPKs validate, corrupt ones still don't.
+     * Rev 7 (v0.6.4): base mounts are no longer derived from our own
+     * validator at all — they are SPLICED from this device's own
+     * hl2/gameinfo.txt, the exact mount list of the game that provably
+     * renders on this device. The validator had an edge case in every
+     * revision so far; hl2's own list cannot be wrong for hl2's own
+     * content. The validator remains as the fallback when hl2's gameinfo
+     * is unreadable, and still guards the MOD's own VPKs.
      */
-    static final String PLANNER_REV = "rev 6";
+    static final String PLANNER_REV = "rev 7";
 
     /**
      * argv-safe gamedir: the engine tokenizer splits on spaces and treats a
@@ -267,15 +274,22 @@ final class TcFirstAid {
         // the mod's own root VPKs (mount names; _dir kept, chunks skipped)
         List<String> vpks = rootVpkMounts(dir);
 
-        // rev 5: enumerate + deep-validate the base VPK inventory so the
-        // planner emits exact names only (no wildcards — a wildcard would
-        // mount a corrupt/truncated archive and the engine's unchecked VPK
-        // walk then aborts the process; the v0.6.1 field crash)
-        List<Tier2Jni.BaseMount> baseMounts = enumerateBaseMounts();
+        // rev 7: base mounts SPLICED from this device's own hl2/gameinfo.txt —
+        // the proven-working mount list of the game that renders correctly.
+        // Falls back to the deep-validated inventory when hl2's gameinfo is
+        // unreadable or yields nothing.
+        List<Tier2Jni.BaseMount> baseMounts = spliceHl2SearchPaths();
+        String baseMountSource = "hl2 gameinfo splice (proven mounts)";
+        if (baseMounts == null || baseMounts.isEmpty()) {
+            baseMounts = enumerateBaseMounts();
+            baseMountSource = "validated inventory";
+        }
         if (!lastRejects.isEmpty())
             Log.w(TAG, "base VPKs rejected (not mounted): " + lastRejects);
-        // the mod's own root VPKs get the same deep validation: a truncated
+        // the mod's own root VPKs still get the deep validation: a truncated
         // archive in the mod folder is skipped with a warning, not mounted
+        // (the pinned engine binary still carries the unchecked VPK walk —
+        // the fork's bounds-checked GetFileList is a source patch only)
         int rejected = 0;
         List<String> ownValidated = new ArrayList<>();
         for (String m : vpks) {
@@ -284,22 +298,20 @@ final class TcFirstAid {
         }
         vpks = ownValidated;
 
-        String text = null;
+        // rev 7: emission is Java-only (the C++ planner's emission is pinned
+        // at rev 6 inside the prebuilt libtier2jni.so; a marker mismatch
+        // would re-generate the gameinfo on every launch)
         List<String> warnings = new ArrayList<>();
-        if (Tier2Jni.available()) {
-            Tier2Jni.Result plan = Tier2Jni.plan(modClass, dir.getName(), game, title, 220, vpks, baseMounts);
-            if (plan.ok && plan.gameinfoText != null && !plan.gameinfoText.isEmpty()) {
-                text = plan.gameinfoText;
-                if (plan.warnings != null) warnings.addAll(plan.warnings);
-            }
-        }
-        if (text == null) {
-            text = fallbackGameinfo(dir.getName(), game, title, vpks, baseMounts);
-            warnings.add("tier2 planner unavailable — Java fallback gameinfo written");
-        }
+        String text = fallbackGameinfo(dir.getName(), game, title, vpks, baseMounts);
         if (rejected > 0)
             warnings.add(rejected + " invalid VPK(s) skipped (corrupt or truncated — not "
                     + "mounted; re-copy them if content is missing)");
+
+        // v0.6.4: seed the TC's cfg/config.cfg from hl2's when it has none —
+        // a first launch otherwise builds a fresh default config (video
+        // cvars included) while hl2's proven one sits right there
+        if (seedConfig(dir))
+            warnings.add("cfg/config.cfg seeded from hl2 (first launch)");
 
         // carry the original's multiplayer type when it was explicit
         if (type != null) text = text.replace("type \"singleplayer_only\"", "type \"" + type + "\"");
@@ -311,14 +323,26 @@ final class TcFirstAid {
         }
         writeText(gi, text);
 
+        // v0.6.4: keep the exact gameinfo the engine will read in the logs
+        // dir — the single most wanted file when a launch misbehaves
+        try {
+            File logs = new File(ModScanner.ROOT, "logs");
+            if (logs.isDirectory())
+                writeText(new File(logs, "gameinfo.last.txt"),
+                        "# written for " + dir.getName() + " at " + new java.util.Date()
+                                + "\n# base mounts: " + baseMountSource + "\n\n" + text);
+        } catch (Throwable ignored) {
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append(original == null
                 ? "gameinfo.txt was missing — generated"
                 : original.contains(PLANNER_MARKER)
-                        ? "gameinfo.txt upgraded to the v0.6.3 mount form (real-format VPK validation: 0xffff part terminators, multi-part entries)"
+                        ? "gameinfo.txt upgraded to the v0.6.4 mount form (base mounts spliced from your hl2's own gameinfo)"
                         : "gameinfo.txt regenerated for the Android engine (original saved as gameinfo.pc.txt)");
+        sb.append("\n\u00b7 base mounts: ").append(baseMountSource);
         if (!warnings.isEmpty()) for (String w : warnings) sb.append("\n\u00b7 ").append(w);
-        if (!vpks.isEmpty()) sb.append("\n\u00b7 ").append(vpks.size()).append(" VPK(s) mounted");
+        if (!vpks.isEmpty()) sb.append("\n\u00b7 ").append(vpks.size()).append(" mod VPK(s) mounted");
         int baseCount = 0;
         for (Tier2Jni.BaseMount bm : baseMounts) baseCount += bm.vpks.size();
         if (baseCount > 0) {
@@ -331,6 +355,142 @@ final class TcFirstAid {
                     .append(" VPK(s) mounted (").append(byDir).append(")");
         }
         return sb.toString();
+    }
+
+    // ------------------------------------------------------ rev 7 splice --
+
+    /**
+     * v0.6.4 (rev 7) — base mounts SPLICED from the device's own
+     * hl2/gameinfo.txt: the exact, proven-working mount list of the game
+     * that renders correctly on this device.
+     *
+     * Every validator revision so far had a real-VPK edge case (rev 5
+     * rejected everything real; rev 6 still left real archives out — the
+     * on-device v0.6.3 log still shows base sounds missing). hl2's own
+     * gameinfo cannot be wrong for hl2's own content: the engine mounts
+     * that list for hl2 on every working launch. Whatever it lists — VPK
+     * files by exact name, loose dirs, the legacy zip*.zip layout — is
+     * what a TC gets, re-rooted to |all_source_engine_paths|.
+     *
+     * Safety: wildcards and ".." are never spliced (the FORTIFY class),
+     * every file must exist on disk, and a gameinfo that WE generated
+     * (our marker) is not trusted as a source. Returns null when there is
+     * nothing usable; the caller falls back to the validated inventory.
+     */
+    static List<Tier2Jni.BaseMount> spliceHl2SearchPaths() {
+        File gi = new File(new File(ModScanner.ROOT, "hl2"), "gameinfo.txt");
+        if (!gi.isFile()) return null;
+        String text;
+        try {
+            text = readText(gi);
+        } catch (IOException e) {
+            return null;
+        }
+        if (text.contains(PLANNER_MARKER)) return null; // our own output — not a proven source
+
+        java.util.LinkedHashMap<String, java.util.LinkedHashSet<String>> byDir =
+                new java.util.LinkedHashMap<>();
+        for (String v : searchPathValues(text)) {
+            String p = v;
+            String low = p.toLowerCase(Locale.ROOT);
+            if (p.isEmpty() || p.equals(".")) continue;
+            if (low.contains("*") || low.contains("?")) continue;  // no wildcards, ever
+            if (low.endsWith(".bsp")) continue;                      // map packs mount themselves
+            if (p.contains("..")) continue;                          // stay inside the root
+            if (p.startsWith("|gameinfo_path|")) {
+                p = "hl2/" + p.substring("|gameinfo_path|".length());
+            } else if (p.startsWith("|all_source_engine_paths|")) {
+                p = p.substring("|all_source_engine_paths|".length());
+            }
+            while (p.startsWith("./")) p = p.substring(2);
+            if (p.isEmpty() || p.equals(".")) continue;
+            if (!p.toLowerCase(Locale.ROOT).endsWith(".vpk")) continue; // dirs handled separately
+            File f = new File(ModScanner.ROOT, p);
+            if (!f.isFile()) continue;                                // must exist on disk
+            String dir = f.getParentFile() != null
+                    ? f.getParentFile().getName() : "";
+            // only base-game dirs make sense as mount roots for a TC
+            if (!isBaseGameDir(dir)) continue;
+            java.util.LinkedHashSet<String> set = byDir.get(dir);
+            if (set == null) { set = new java.util.LinkedHashSet<>(); byDir.put(dir, set); }
+            set.add(f.getName());
+        }
+        if (byDir.isEmpty()) return null;
+        List<Tier2Jni.BaseMount> out = new ArrayList<>();
+        for (java.util.Map.Entry<String, java.util.LinkedHashSet<String>> e : byDir.entrySet())
+            out.add(new Tier2Jni.BaseMount(e.getKey(), new ArrayList<>(e.getValue())));
+        return out;
+    }
+
+    /** True for the base-game dirs a TC can legally mount content from. */
+    static boolean isBaseGameDir(String dir) {
+        if (dir == null || dir.isEmpty()) return false;
+        for (String b : BASE_GAME_DIRS) if (b.equalsIgnoreCase(dir)) return true;
+        return false;
+    }
+
+    /**
+     * Raw SearchPaths values (Game/Mod entries) of a gameinfo text — a tiny
+     * scanner: find the SearchPaths block, take quoted-or-bare values of
+     * Game/Mod keys (suffixes like Game+GameWrite count as Game), strip
+     * // comments. GameBin and friends are ignored (binary dirs, not content).
+     */
+    static List<String> searchPathValues(String text) {
+        List<String> out = new ArrayList<>();
+        boolean in = false;
+        int depth = 0;
+        for (String raw : text.split("\n")) {
+            String line = raw;
+            int c = line.indexOf("//");
+            if (c >= 0) line = line.substring(0, c);
+            line = line.trim();
+            if (line.isEmpty()) continue;
+            if (!in) {
+                String bare = line.replace("\"", "").trim();
+                if (bare.equalsIgnoreCase("SearchPaths")
+                        || bare.toLowerCase(Locale.ROOT).startsWith("searchpaths")) {
+                    in = true;
+                    depth = 1;
+                }
+                continue;
+            }
+            if (line.startsWith("{")) { depth++; continue; }
+            if (line.startsWith("}")) { depth--; if (depth <= 0) break; continue; }
+            int sp = line.indexOf(' ');
+            int tb = line.indexOf('\t');
+            if (tb >= 0 && (sp < 0 || tb < sp)) sp = tb;
+            if (sp <= 0) continue;
+            String key = line.substring(0, sp).replace("\"", "").trim();
+            String val = line.substring(sp + 1).replace("\"", "").trim();
+            int plus = key.indexOf('+');
+            if (plus >= 0) key = key.substring(0, plus);
+            if (!key.equalsIgnoreCase("Game") && !key.equalsIgnoreCase("Mod")) continue;
+            if (val.isEmpty() || val.equals(".")) continue;
+            out.add(val);
+        }
+        return out;
+    }
+
+    /**
+     * v0.6.4: seed the TC's cfg/config.cfg from hl2's when it has none.
+     * A TC's first launch otherwise builds a fresh default config — video
+     * cvars included — while hl2's proven one is sitting right there. Same
+     * engine, same fallback game code: hl2's config is the best-known-good
+     * starting point and removes a variable from the first-boot path.
+     */
+    static boolean seedConfig(File tcDir) {
+        try {
+            File dst = new File(tcDir, "cfg/config.cfg");
+            if (dst.isFile()) return false;
+            File src = new File(new File(ModScanner.ROOT, "hl2"), "cfg/config.cfg");
+            if (!src.isFile()) return false;
+            File cfgDir = new File(tcDir, "cfg");
+            if (!cfgDir.isDirectory() && !cfgDir.mkdirs()) return false;
+            writeText(dst, readText(src));
+            return true;
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
     }
 
     // ------------------------------------------------------ rev 5 validation --
@@ -559,7 +719,7 @@ final class TcFirstAid {
                                    List<Tier2Jni.BaseMount> baseMounts) {
         StringBuilder o = new StringBuilder();
         o.append("\"gameinfo\"\n{\n");
-        o.append("\t// generated by half-sourceG100 mount planner (Tier 2, rev 6)\n");
+        o.append("\t// generated by half-sourceG100 mount planner (Tier 2, rev 7)\n");
         o.append("\tgame \"").append(escapeKv(game.isEmpty() ? modDir : game)).append("\"\n");
         o.append("\ttitle \"").append(escapeKv(title)).append("\"\n");
         o.append("\ttitle2 \"\"\n");
