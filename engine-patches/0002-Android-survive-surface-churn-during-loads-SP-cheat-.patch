@@ -1,4 +1,4 @@
-From c78ca544a06f0036a40aeae26c70580e4cb7a22a Mon Sep 17 00:00:00 2001
+From 719c055eee5244801a47bb42995f07239e91fcce Mon Sep 17 00:00:00 2001
 From: Z User <z@container>
 Date: Sat, 28 Nov 2026 10:42:49 +0000
 Subject: [PATCH 2/2] Android: survive surface churn during loads + SP
@@ -17,14 +17,14 @@ Subject: [PATCH 2/2] Android: survive surface churn during loads + SP
   the fog controller's cheat-flagged cvars are not refused (and re-refused
   after every sv_cheats reset) during map spawn
 ---
- appframework/sdlmgr.cpp | 3187 +++++++++---------
+ appframework/sdlmgr.cpp | 3192 +++++++++---------
  engine/gl_screen.cpp    |  383 +--
  engine/host.cpp         | 6985 ++++++++++++++++++++-------------------
  engine/view.cpp         |  913 ++---
- 4 files changed, 5765 insertions(+), 5703 deletions(-)
+ 4 files changed, 5770 insertions(+), 5703 deletions(-)
 
 diff --git a/appframework/sdlmgr.cpp b/appframework/sdlmgr.cpp
-index 53ca92d..82d714f 100644
+index 53ca92d..a1661af 100644
 --- a/appframework/sdlmgr.cpp
 +++ b/appframework/sdlmgr.cpp
 @@ -31,7 +31,7 @@
@@ -1504,7 +1504,7 @@ index 53ca92d..82d714f 100644
  }
  
  #endif // DX_TO_GL_ABSTRACTION
-@@ -987,1183 +987,1204 @@ bool CSDLMgr::MakeContextCurrent( PseudoGLContextPtr hContext )
+@@ -987,1183 +987,1209 @@ bool CSDLMgr::MakeContextCurrent( PseudoGLContextPtr hContext )
  
  int CSDLMgr::GetEvents( CCocoaEvent *pEvents, int nMaxEventsToReturn, bool debugEvent )
  {
@@ -2293,12 +2293,17 @@ index 53ca92d..82d714f 100644
 +        // (recreated) EGL surface and present the frame again. If the new
 +        // surface is not ready yet the rebind simply fails and the next frame
 +        // retries - no permanent dead-renderer state.
-+        if ( SDL_GL_SwapWindow( m_Window ) < 0 )
++        SDL_ClearError();
++        SDL_GL_SwapWindow( m_Window );
 +        {
-+                SDL_ClearError();
-+                if ( m_GLContext && SDL_GL_MakeCurrent( m_Window, m_GLContext ) == 0 )
++                const char *pszSwapError = SDL_GetError();
++                if ( pszSwapError && pszSwapError[0] )
 +                {
-+                        SDL_GL_SwapWindow( m_Window );
++                        SDL_ClearError();
++                        if ( m_GLContext && SDL_GL_MakeCurrent( m_Window, m_GLContext ) == 0 )
++                        {
++                                SDL_GL_SwapWindow( m_Window );
++                        }
 +                }
 +        }
 +#else
@@ -3650,7 +3655,7 @@ index 53ca92d..82d714f 100644
  }
  
  //===============================================================================
-@@ -2171,76 +2192,76 @@ void CSDLMgr::SetGammaRamp( const uint16 *pRed, const uint16 *pGreen, const uint
+@@ -2171,76 +2197,76 @@ void CSDLMgr::SetGammaRamp( const uint16 *pRed, const uint16 *pGreen, const uint
  #if defined( DX_TO_GL_ABSTRACTION )
  void CSDLMgr::GetDesiredPixelFormatAttribsAndRendererInfo( uint **ptrOut, uint *countOut, GLMRendererInfoFields *rendInfoOut )
  {
