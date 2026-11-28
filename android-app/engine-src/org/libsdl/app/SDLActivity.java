@@ -272,7 +272,6 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             }
         }, SURFACE_STABLE_QUIET_MS);
     }
-    }
 
     protected static SDLGenericMotionListener_API12 getMotionListener() {
         if (mMotionListener == null) {
