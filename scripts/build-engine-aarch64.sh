@@ -39,6 +39,17 @@ if [ ! -d "$WORKDIR/android-ndk-r10e" ]; then
   echo "== NDK r10e =="
   wget -q "https://dl.google.com/android/repository/android-ndk-r10e-linux-x86_64.zip" -O ndk.zip
   unzip -q ndk.zip && rm -f ndk.zip
+  # trim to aarch64-only (saves ~2.5 GB; the build needs just the aarch64
+  # gcc-4.9 toolchain, the android-21 platform, android/support and gnustl)
+  ( cd "$WORKDIR/android-ndk-r10e" && rm -rf toolchains/llvm-3.6 toolchains/llvm-3.5 \
+      toolchains/arm-linux-androideabi-4.9 toolchains/arm-linux-androideabi-4.8 \
+      toolchains/x86_64-4.9 toolchains/x86-4.9 toolchains/x86-4.8 \
+      toolchains/mips64el-linux-android-4.9 toolchains/mipsel-linux-android-4.9 \
+      toolchains/mips64el-linux-android-4.8 toolchains/mipsel-linux-android-4.8 \
+      docs samples tests platforms/android-3 platforms/android-4 platforms/android-5 \
+      platforms/android-8 platforms/android-9 sources/cxx-stl/gabi++ \
+      sources/cxx-stl/llvm-libc++ sources/cxx-stl/llvm-libc++abi \
+      sources/cxx-stl/stlport sources/cxx-stl/system 2>/dev/null ) || true
 fi
 if [ ! -x "$WORKDIR/llvm16/bin/clang" ]; then
   echo "== clang 16.0.6 (Debian pool, no root needed) =="
@@ -84,7 +95,9 @@ if [ ! -d "$ENGINE_DIR" ]; then
   git checkout -q -b half-source-g100
   for p in "$ROOT"/engine-patches/*.patch; do
     echo "applying $(basename "$p")"
-    git apply "$p" && git add -A && git commit -qm "apply $(basename "$p")"
+    git apply "$p" && git add -A && \
+      git -c user.name=half-sourceG100 -c user.email=build@halfsource.local \
+        commit -qm "apply $(basename "$p")"
   done
   cd "$WORKDIR"
 fi

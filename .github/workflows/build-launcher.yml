@@ -30,10 +30,19 @@ jobs:
       - name: Build tier2 JNI libraries (aarch64 + armv7a)
         run: bash scripts/build-jni.sh all
 
+      # Since v0.7.0 the ENGINE is built from source too (open tree:
+      # AruMoon/source-engine @ 87150cc028 + engine-patches/). The script
+      # sets up its own toolchain (NDK r10e + Clang 16.0.6 + ccache), clones
+      # the pinned commit, applies our patches and builds aarch64/togles.
+      - name: Build the engine from source (aarch64, togles/GLES3)
+        run: bash scripts/build-engine-aarch64.sh
+
       - name: Build launcher-only APK
         run: bash scripts/make-launcher-apk.sh
 
       - name: "Build merged engine APK (ONE APK: manager + engine)"
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/../engine-build/source-engine/build
         run: bash scripts/make-launcher-apk.sh --with-engine
 
       - uses: actions/upload-artifact@v4
