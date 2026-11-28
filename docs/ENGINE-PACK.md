@@ -3,7 +3,43 @@
 The launcher APK and the engine ship together. Nothing is delegated to a
 separate app.
 
-## What is bundled (v0.5.0+)
+## What is bundled (v0.7.0+): OUR OWN ENGINE BUILD
+
+Since v0.7.0 the engine is **built by us, from source**. The base is the
+open-source tree `AruMoon/source-engine` @ `87150cc028` (a public fork of
+nillerusr/source-engine — and the exact commit the previous pinned binary
+reported), plus the patches in [`engine-patches/`](../engine-patches/):
+
+- `0001` — the v0.6.3 hardening: bounds-checked `CPackedStore::GetFileList`
+  (kills the FORTIFY `vsprintf` SIGABRT class), background art never fatal.
+- `0002` — the engine-side Android fixes that the closed binary could never
+  get:
+  - **Surface-churn survival during map loads** — `V_RenderVGuiOnly()` now
+    pumps SDL's Android window/surface machinery while painting loading
+    screens (the frame loop — the only pump — does not run during a
+    synchronous load), `CSDLMgr::ShowPixels` self-heals a failed present by
+    re-binding the GL context to the recreated EGL surface, and
+    `SCR_UpdateScreen` keeps painting the loading UI on Android during
+    single-player loads. Together these kill the "engine runs, screen stays
+    black forever, BLASTBufferQueue NO_BUFFER_AVAILABLE flood" failure that
+    no launcher-side workaround could fix (v0.6.4–v0.6.6).
+  - **Single-player cheat-cvar fix** — `Host_IsSinglePlayerGame()` now trusts
+    the loading local server, so map logic setting the fog controller's
+    FCVAR_CHEAT cvars is no longer refused with "Can't use cheat cvar ...
+    in multiplayer" on every spawn (and re-refused after every sv_cheats
+    reset).
+
+Toolchain (matches the old pinned binary's own metadata: Clang 16.0.6, NDK
+r10e sysroot, lld, GLES3/togl): `scripts/build-engine-aarch64.sh` sets up
+NDK r10e + Clang 16.0.6 + ccache, clones the pinned commit, applies the
+patches, and builds `--android=aarch64,host,21 --togles -T release`.
+The packager picks the result up via `ENGINE_DIR=<...>/source-engine/build
+scripts/make-launcher-apk.sh --with-engine`. SDL2 stays the prebuilt
+`lib/android/aarch64/libSDL2.so` from the tree's `lib` submodule; the
+touch-UI `extras_dir.vpk` and fonts still come from the pinned pack
+(content, not code).
+
+## What was bundled (v0.5.0 – v0.6.6): the pinned binary
 
 The engine is the **modern nillerusr-lineage build v1.17.0025** (December 2023,
 aarch64, togl/GLES3 renderer, `liblauncher.so` entry point) — the same engine

@@ -17,6 +17,14 @@
 # Requirements: scripts/setup-local-sdk.sh (SDK build-tools 35 + platform 34
 # + NDK) and scripts/build-jni.sh for the tier2 classifier + crash guard.
 # Usage: scripts/make-launcher-apk.sh [--with-engine] [ENGINE_APK=path]
+#
+# ENGINE_DIR (env, optional): directory with a SELF-BUILT engine .so set
+# (the output of scripts/build-engine-aarch64.sh — engine/build). When set,
+# lib/arm64-v8a comes from that build instead of the pinned v1.17.0025
+# pack; assets/ (extras_dir.vpk touch UI + fonts) still come from the
+# pinned pack — they are content, not code. Since v0.7.0 the shipped engine
+# is OUR OWN build of the open-source tree (AruMoon/source-engine @
+# 87150cc028 + engine-patches/), so engine-level fixes are possible.
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
@@ -92,26 +100,47 @@ NAT="$STAGE/nativelibs"
 rm -rf "$NAT"
 mkdir -p "$NAT/lib"
 if [ "$WITH_ENGINE" = "1" ]; then
-  # fetch the pinned engine build if needed
-  if [ -z "$ENGINE_APK" ]; then
-    if [ ! -f "$ENGINE_CACHE" ]; then
-      mkdir -p "$ROOT/engine-pack"
-      echo "downloading engine pack (pinned v1.17.0025, aarch64) ..."
-      curl -sL --fail -o "$ENGINE_CACHE" "$ENGINE_URL"
-    fi
-    ENGINE_APK="$ENGINE_CACHE"
-  fi
-  [ -f "$ENGINE_APK" ] || { echo "ERROR: engine APK not found: $ENGINE_APK" >&2; exit 1; }
-  if [ "$ENGINE_SHA256" != "SET_AT_UPLOAD" ]; then
-    echo "$ENGINE_SHA256  $ENGINE_APK" | sha256sum -c - || {
-      echo "ERROR: engine pack checksum mismatch — refusing to bundle" >&2; exit 1; }
-  fi
   ENG="$STAGE/engine"
   mkdir -p "$ENG"
-  # 64-bit ONLY: the v1.17 engine set is arm64-v8a; bundling the 32-bit set
-  # would double the APK size for a device class this fork does not target.
-  unzip -q -o "$ENGINE_APK" 'lib/arm64-v8a/*' 'assets/*' -d "$ENG"
-  cp -r "$STAGE/engine/lib/arm64-v8a" "$NAT/lib/"
+  if [ -n "$ENGINE_DIR" ]; then
+    # SELF-BUILT engine: our patches, our build (see engine-patches/ and
+    # scripts/build-engine-aarch64.sh). SDL is prebuilt from the engine
+    # tree's lib submodule; everything else is compiled from source.
+    echo "engine: self-built set from $ENGINE_DIR"
+    mkdir -p "$NAT/lib/arm64-v8a"
+    find "$ENGINE_DIR" -name '*.so' -exec cp '{}' "$NAT/lib/arm64-v8a/" \;
+    SDL_SRC="$(dirname "$ENGINE_DIR")/lib/android/aarch64/libSDL2.so"
+    [ -f "$SDL_SRC" ] || { echo "ERROR: $SDL_SRC missing (engine lib submodule)" >&2; exit 1; }
+    cp "$SDL_SRC" "$NAT/lib/arm64-v8a/"
+    # assets (touch-UI VPK + fonts) from the pinned pack — content, not code
+    if [ -z "$ENGINE_APK" ]; then
+      if [ ! -f "$ENGINE_CACHE" ]; then
+        mkdir -p "$ROOT/engine-pack"
+        echo "downloading engine pack (pinned v1.17.0025, aarch64) for assets ..."
+        curl -sL --fail -o "$ENGINE_CACHE" "$ENGINE_URL"
+      fi
+      ENGINE_APK="$ENGINE_CACHE"
+    fi
+    [ -f "$ENGINE_APK" ] || { echo "ERROR: engine APK not found: $ENGINE_APK" >&2; exit 1; }
+    unzip -q -o "$ENGINE_APK" 'assets/*' -d "$ENG"
+  else
+    # fetch the pinned engine build if needed
+    if [ -z "$ENGINE_APK" ]; then
+      if [ ! -f "$ENGINE_CACHE" ]; then
+        mkdir -p "$ROOT/engine-pack"
+        echo "downloading engine pack (pinned v1.17.0025, aarch64) ..."
+        curl -sL --fail -o "$ENGINE_CACHE" "$ENGINE_URL"
+      fi
+      ENGINE_APK="$ENGINE_CACHE"
+    fi
+    [ -f "$ENGINE_APK" ] || { echo "ERROR: engine APK not found: $ENGINE_APK" >&2; exit 1; }
+    if [ "$ENGINE_SHA256" != "SET_AT_UPLOAD" ]; then
+      echo "$ENGINE_SHA256  $ENGINE_APK" | sha256sum -c - || {
+        echo "ERROR: engine pack checksum mismatch — refusing to bundle" >&2; exit 1; }
+    fi
+    unzip -q -o "$ENGINE_APK" 'lib/arm64-v8a/*' 'assets/*' -d "$ENG"
+    cp -r "$STAGE/engine/lib/arm64-v8a" "$NAT/lib/"
+  fi
   if [ -f "$APP/libs/arm64-v8a/libtier2jni.so" ]; then
     cp "$APP/libs/arm64-v8a/libtier2jni.so" "$NAT/lib/arm64-v8a/"
   else

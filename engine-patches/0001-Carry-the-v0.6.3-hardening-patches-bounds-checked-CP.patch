@@ -1,0 +1,421 @@
+From ade2a6b68fa5a5e404b4eaf9936fd4c1ff2d1e80 Mon Sep 17 00:00:00 2001
+From: Z User <z@container>
+Date: Sat, 28 Nov 2026 10:42:13 +0000
+Subject: [PATCH 1/2] Carry the v0.6.3 hardening patches: bounds-checked
+ CPackedStore::GetFileList; never-fatal background art
+
+---
+ engine/sys_getmodes.cpp | 119 ++++++++++++++++++++-----------
+ vpklib/packedstore.cpp  | 150 +++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 210 insertions(+), 59 deletions(-)
+
+diff --git a/engine/sys_getmodes.cpp b/engine/sys_getmodes.cpp
+index 43dce4d..5b4b36b 100644
+--- a/engine/sys_getmodes.cpp
++++ b/engine/sys_getmodes.cpp
+@@ -678,7 +678,10 @@ IVTFTexture *CVideoMode_Common::LoadVTF( CUtlBuffer &temp, const char *szFileNam
+     IVTFTexture *texture = CreateVTFTexture();
+     if ( !texture->Unserialize( temp ) )
+     {
+-        Error( "Invalid or corrupt background texture %s\n", szFileName );
++        // hsg100: a corrupt background texture is cosmetic damage, not a
++        // reason to kill the launch (TC mods ship odd art).
++        Warning( "Invalid or corrupt background texture %s\n", szFileName );
++        DestroyVTFTexture( texture );
+         return NULL;
+     }
+     texture->ConvertImageFormat( IMAGE_FORMAT_RGBA8888, false );
+@@ -694,19 +697,25 @@ void CVideoMode_Common::ComputeStartupGraphicName( char *pBuf, int nBufLen )
+     CL_GetBackgroundLevelName( szBackgroundName, sizeof(szBackgroundName), false );
+ 
+     float aspectRatio = (float)GetModeStereoWidth() / GetModeStereoHeight();
+-    if ( aspectRatio >= 1.6f )
+-    {
+-        // use the widescreen version
+-        Q_snprintf( pBuf, nBufLen, "materials/console/%s_widescreen.vtf", szBackgroundName );
+-    }
+-    else
+-    {
+-        Q_snprintf( pBuf, nBufLen, "materials/console/%s.vtf", szBackgroundName );
+-    }
+-
++    const char *szWanted = ( aspectRatio >= 1.6f ) ? "_widescreen" : "";
++    const char *szOther  = ( aspectRatio >= 1.6f ) ? "" : "_widescreen";
++    Q_snprintf( pBuf, nBufLen, "materials/console/%s%s.vtf", szBackgroundName, szWanted );
++
++    // hsg100: TC mods often ship only one aspect variant (or none). Fall
++    // back to the other aspect of the same background, then the stock
++    // background in both aspects. A missing graphic here only means the
++    // material renders as a missing texture; it must never kill the launch.
+     if ( !g_pFileSystem->FileExists( pBuf, "GAME" ) )
+     {
+-        Q_strncpy( pBuf, ( aspectRatio >= 1.6f ) ? "materials/console/background01_widescreen.vtf" : "materials/console/background01.vtf", nBufLen );
++        Q_snprintf( pBuf, nBufLen, "materials/console/%s%s.vtf", szBackgroundName, szOther );
++        if ( !g_pFileSystem->FileExists( pBuf, "GAME" ) )
++        {
++            Q_snprintf( pBuf, nBufLen, "materials/console/background01%s.vtf", szWanted );
++            if ( !g_pFileSystem->FileExists( pBuf, "GAME" ) )
++            {
++                Q_snprintf( pBuf, nBufLen, "materials/console/background01%s.vtf", szOther );
++            }
++        }
+     }
+ }
+ 
+@@ -790,17 +799,24 @@ void CVideoMode_Common::SetupStartupGraphic()
+     char material[_MAX_PATH];
+     CUtlBuffer buf;
+ 
++    // hsg100: TC mods ship wildly different console art -- often only the
++    // 4:3 variant, often none at all. Missing startup art must never kill
++    // the launch (the old fatal Error() here is what made every total
++    // conversion mod die with "Can't find background image '...'").
++    // Candidate chain: the background for this aspect, the same background
++    // in the other aspect, then the stock background01 in both aspects.
+     float aspectRatio = (float)GetModeWidth() / GetModeHeight();
+-    if ( aspectRatio >= 1.6f )
++    const char *szWanted = ( aspectRatio >= 1.6f ) ? "_widescreen" : "";
++    const char *szOther  = ( aspectRatio >= 1.6f ) ? "" : "_widescreen";
++
++    Q_snprintf( material, sizeof(material), "materials/console/%s%s.vtf", szBackgroundName, szWanted );
++    if ( !g_pFileSystem->FileExists( material, "GAME" ) )
+     {
+-        // use the widescreen version
+-        Q_snprintf( material, sizeof(material), 
+-            "materials/console/%s_widescreen.vtf", szBackgroundName );
++        Q_snprintf( material, sizeof(material), "materials/console/%s%s.vtf", szBackgroundName, szOther );
+     }
+-    else
++    if ( !g_pFileSystem->FileExists( material, "GAME" ) )
+     {
+-        Q_snprintf( material, sizeof(material), 
+-            "materials/console/%s.vtf", szBackgroundName );
++        Q_snprintf( material, sizeof(material), "materials/console/background01%s.vtf", szWanted );
+     }
+ 
+     // load in the background vtf
+@@ -808,11 +824,16 @@ void CVideoMode_Common::SetupStartupGraphic()
+     m_pBackgroundTexture = LoadVTF( buf, material );
+     if ( !m_pBackgroundTexture )
+     {
+-        // fallback to opening just the default background
+-        m_pBackgroundTexture = LoadVTF( buf, ( aspectRatio >= 1.6f ) ? "materials/console/background01_widescreen.vtf" : "materials/console/background01.vtf" );
++        // last resort: the stock default in the other aspect
++        Q_snprintf( material, sizeof(material), "materials/console/background01%s.vtf", szOther );
++        m_pBackgroundTexture = LoadVTF( buf, material );
+         if ( !m_pBackgroundTexture )
+         {
+-            Error( "Can't find background image '%s'\n", material );
++            // no usable startup art anywhere: continue without it (the menu
++            // renders over a black background; the launch must survive)
++            Warning( "Can't find background image '%s' -- continuing without startup art\n", material );
++            m_pBackgroundTexture = NULL;
++            m_pLoadingTexture = NULL;
+             return;
+         }
+     }
+@@ -825,8 +846,10 @@ void CVideoMode_Common::SetupStartupGraphic()
+     m_pLoadingTexture = LoadVTF( buf, loading );
+     if ( !m_pLoadingTexture )
+     {
+-        Error( "Can't find background image '%s'\n", loading );
+-        return;
++        // the loading overlay lives in hl2_misc_dir.vpk and is often absent
++        // from a TC's mount set; missing it only skips the corner logo
++        Warning( "Can't find background image '%s' -- continuing without the loading overlay\n", loading );
++        m_pLoadingTexture = NULL;
+     }
+ }
+ 
+@@ -862,7 +885,10 @@ void CVideoMode_Common::DrawStartupGraphic()
+ 
+     SetupStartupGraphic();
+ 
+-    if ( !m_pBackgroundTexture || !m_pLoadingTexture )
++    // hsg100: a missing loading overlay (hl2_misc_dir.vpk not mounted by a
++    // TC) must not blank the whole startup graphic; only the background is
++    // required, every loading-material use below is guarded
++    if ( !m_pBackgroundTexture )
+         return;
+ 
+     CMatRenderContextPtr pRenderContext( g_pMaterialSystem );
+@@ -890,21 +916,25 @@ void CVideoMode_Common::DrawStartupGraphic()
+     if ( IsSteamDeck() )
+         loading = "gamepadui/game_logo.vtf";
+ 
+-    pVMTKeyValues = new KeyValues( "UnlitGeneric" );
+-    pVMTKeyValues->SetString( "$basetexture", loading );
+-    pVMTKeyValues->SetInt( "$translucent", 1 );
+-    pVMTKeyValues->SetInt( "$ignorez", 1 );
+-    pVMTKeyValues->SetInt( "$nofog", 1 );
+-    pVMTKeyValues->SetInt( "$no_fullbright", 1 );
+-    pVMTKeyValues->SetInt( "$nocull", 1 );
+-    IMaterial *pLoadingMaterial = g_pMaterialSystem->CreateMaterial( "__loading", pVMTKeyValues );
++    IMaterial *pLoadingMaterial = NULL;
++    if ( m_pLoadingTexture )
++    {
++        pVMTKeyValues = new KeyValues( "UnlitGeneric" );
++        pVMTKeyValues->SetString( "$basetexture", loading );
++        pVMTKeyValues->SetInt( "$translucent", 1 );
++        pVMTKeyValues->SetInt( "$ignorez", 1 );
++        pVMTKeyValues->SetInt( "$nofog", 1 );
++        pVMTKeyValues->SetInt( "$no_fullbright", 1 );
++        pVMTKeyValues->SetInt( "$nocull", 1 );
++        pLoadingMaterial = g_pMaterialSystem->CreateMaterial( "__loading", pVMTKeyValues );
++    }
+ 
+     int w = GetModeStereoWidth();
+     int h = GetModeStereoHeight();
+     int tw = m_pBackgroundTexture->Width();
+     int th = m_pBackgroundTexture->Height();
+-    int lw = m_pLoadingTexture->Width();
+-    int lh = m_pLoadingTexture->Height();
++    int lw = m_pLoadingTexture ? m_pLoadingTexture->Width() : 0;
++    int lh = m_pLoadingTexture ? m_pLoadingTexture->Height() : 0;
+ 
+ 	if (debugstartup)
+ 	{
+@@ -929,11 +959,14 @@ void CVideoMode_Common::DrawStartupGraphic()
+ 				slide = 0;
+ 				
+ 				DrawScreenSpaceRectangle( pMaterial, 0, 0+slide, w, h-50, 0, 0, tw-1, th-1, tw, th, NULL,1,1,depth );
+-                if ( !IsSteamDeck() )
+-                    DrawScreenSpaceRectangle( pLoadingMaterial, w-lw, h-lh+slide/2, lw, lh, 0, 0, lw-1, lh-1, lw, lh, NULL,1,1,depth-0.1 );
+-                else
+-                    // TODO: Steam Deck
+-                    DrawScreenSpaceRectangle( pLoadingMaterial, w-lw, h-lh+slide/2, lw, lh, 0, 0, lw-1, lh-1, lw, lh, NULL,1,1,depth-0.1 );
++                if ( pLoadingMaterial )
++                {
++                    if ( !IsSteamDeck() )
++                        DrawScreenSpaceRectangle( pLoadingMaterial, w-lw, h-lh+slide/2, lw, lh, 0, 0, lw-1, lh-1, lw, lh, NULL,1,1,depth-0.1 );
++                    else
++                        // TODO: Steam Deck
++                        DrawScreenSpaceRectangle( pLoadingMaterial, w-lw, h-lh+slide/2, lw, lh, 0, 0, lw-1, lh-1, lw, lh, NULL,1,1,depth-0.1 );
++                }
+ 			}
+ 
+ 			if(0)
+@@ -978,7 +1011,8 @@ void CVideoMode_Common::DrawStartupGraphic()
+ 			pRenderContext->ClearColor3ub( 0, 0, 0 );
+ 			pRenderContext->ClearBuffers( true, true, true );
+ 			DrawScreenSpaceRectangle( pMaterial, 0, 0, w, h, 0, 0, tw-1, th-1, tw, th, NULL,1,1,depth );
+-			DrawScreenSpaceRectangle( pLoadingMaterial, w-lw, h-lh, lw, lh, 0, 0, lw-1, lh-1, lw, lh, NULL,1,1,depth );
++			if ( pLoadingMaterial )
++				DrawScreenSpaceRectangle( pLoadingMaterial, w-lw, h-lh, lw, lh, 0, 0, lw-1, lh-1, lw, lh, NULL,1,1,depth );
+ 			g_pMaterialSystem->SwapBuffers();
+ 		}
+ 	}
+@@ -988,7 +1022,8 @@ void CVideoMode_Common::DrawStartupGraphic()
+ #endif
+ 
+     pMaterial->Release();
+-    pLoadingMaterial->Release();
++    if ( pLoadingMaterial )
++        pLoadingMaterial->Release();
+ 
+     // release graphics
+     DestroyVTFTexture( m_pBackgroundTexture );
+diff --git a/vpklib/packedstore.cpp b/vpklib/packedstore.cpp
+index 1c12347..c14ebae 100644
+--- a/vpklib/packedstore.cpp
++++ b/vpklib/packedstore.cpp
+@@ -1696,6 +1696,58 @@ ePackedStoreAddResultCode CPackedStore::AddFile( char const *pFile, uint16 nMeta
+ 	return nRslt;
+ }
+ 
++// hsg100 v0.6.3 — bounds-checked directory-tree walking helpers.
++//
++// The FindFirst emulation (BuildFindFirstCache -> GetFileList) used to walk
++// the raw tree with unchecked strlen/sprintf into MAX_PATH stack buffers.
++// A truncated or corrupt archive made strlen run through the heap until it
++// hit a random NUL and FORTIFY killed the process:
++//   FORTIFY: vsprintf: prevented 77844-byte write into 260-byte buffer
++//   SIGABRT  CPackedStore::GetFileList <- BuildFindFirstCache <-
++//            GetFileAndDirLists <- CBaseFileSystem::FindFirstHelper <-
++//            Sys_FindFirst <- CServerPlugin::LoadPlugins
++// The helpers below never read outside [p, pEnd); a corrupt tree now stops
++// the listing instead of the process.
++
++// Returns the pointer just past the NUL-terminated string at p, or NULL
++// when the string is not NUL-terminated inside [p, pEnd).
++static char const *VpkNextTreeString( char const *p, char const *pEnd )
++{
++	while ( p < pEnd && *p )
++		++p;
++	if ( p >= pEnd )
++		return NULL;
++	return p + 1;		// past the NUL
++}
++
++// Advances one directory entry (crc u32 + metasize u16 + part descriptors +
++// PACKFILEINDEX_END terminator u16 + preload bytes). pEntry points at the
++// first byte AFTER the entry's name string. Returns false when the entry
++// is truncated inside [pEntry, pEnd); on success *ppOut is the next entry.
++static bool VpkSkipEntryBounded( char const *pEntry, char const *pEnd, char const **ppOut )
++{
++	if ( pEntry + sizeof( uint32 ) + sizeof( uint16 ) > pEnd )
++		return false;
++
++	uint16 nMetaDataSize;
++	Q_memcpy( &nMetaDataSize, pEntry + sizeof( uint32 ), sizeof( uint16 ) );
++
++	char const *p = pEntry + sizeof( uint32 ) + sizeof( uint16 );
++	while ( p + sizeof( PackFileIndex_t ) <= pEnd
++		 && Q_memcmp( p, &packedfileindex_end, sizeof( packedfileindex_end ) ) != 0 )
++	{
++		p += sizeof( CFilePartDescr );
++	}
++	if ( p + sizeof( PackFileIndex_t ) > pEnd )		// no terminator inside the tree
++		return false;
++	p += sizeof( PackFileIndex_t );
++	if ( p + nMetaDataSize > pEnd )					// preload runs past the tree
++		return false;
++
++	*ppOut = p + nMetaDataSize;
++	return true;
++}
++
+ int CPackedStore::GetFileList( CUtlStringList &outFilenames, bool bFormattedOutput, bool bSortedOutput )
+ {
+ 	return GetFileList( NULL, outFilenames, bFormattedOutput, bSortedOutput );
+@@ -1729,38 +1781,85 @@ int CPackedStore::GetFileList( const char *pWildCard, CUtlStringList &outFilenam
+ 	}
+ 
+ 	char const *pData = reinterpret_cast< char const *>( DirectoryData() );
+-	while( *pData )
++	char const *pTreeEnd = pData + m_nDirectoryDataSize;
++	bool bTreeCorrupt = false;
++
++	while ( pData && pData < pTreeEnd && *pData )
+ 	{
+-		// for each extension
++		// for each extension. The string must be confirmed NUL-terminated
++		// INSIDE the tree before it is formatted with %s — the raw walk
++		// sprintf'd first and checked never (the FORTIFY abort class).
++		char const *pAfterExt = VpkNextTreeString( pData, pTreeEnd );
++		if ( !pAfterExt )
++		{
++			bTreeCorrupt = true;
++			break;
++		}
+ 		char pszCurExtension[MAX_PATH];
+ 		if ( pData[0] != ' ' )
+-			sprintf( pszCurExtension, ".%s", pData );
++			V_snprintf( pszCurExtension, sizeof( pszCurExtension ), ".%s", pData );
+ 		else
+ 			pszCurExtension[0] = 0;
++		pData = pAfterExt;
+ 		// now, iterate over all directories associated with this extension
+-		pData += 1 + strlen( pData );
+-		while( *pData )
++		while ( pData && pData < pTreeEnd && *pData )
+ 		{
++			char const *pAfterDir = VpkNextTreeString( pData, pTreeEnd );
++			if ( !pAfterDir )
++			{
++				bTreeCorrupt = true;
++				break;
++			}
+ 			char pszCurDir[MAX_PATH];
+ 			if ( pData[0] != ' ' )
+-				sprintf( pszCurDir, "%s/", pData );
++				V_snprintf( pszCurDir, sizeof( pszCurDir ), "%s/", pData );
+ 			else
+ 				pszCurDir[0] = 0;
+-			pData += 1 + strlen( pData );					// skip dir name
++			pData = pAfterDir;
+ 			// now, march through all the files
+-			while( *pData )									// until we're out of files to look at
++			while ( pData && pData < pTreeEnd && *pData )			// until we're out of files to look at
+ 			{
++				// the name must be NUL-terminated inside the tree before
++				// anything dereferences or sprintf's it
++				char const *pAfterName = VpkNextTreeString( pData, pTreeEnd );
++				if ( !pAfterName )
++				{
++					bTreeCorrupt = true;
++					break;
++				}
++
+ 				char pszFNameOut[MAX_PATH*2];
+ 				if ( bFormattedOutput )
+ 				{
+-					CFileHeaderFixedData const *pHeader = reinterpret_cast< CFileHeaderFixedData const *>( pData + 1 + strlen( pData ) );
+-					sprintf( pszFNameOut, "%s%s%s crc=0x%x metadatasz=%d", pszCurDir, pData, pszCurExtension, pHeader->m_nFileCRC, pHeader->m_nMetaDataSize );
+-					CFilePartDescr const *pPart = &( pHeader->m_PartDescriptors[0] );
+-					while( pPart->m_nFileNumber != PACKFILEINDEX_END )
++					// the fixed entry header must be inside the tree; the
++					// packed tree has no alignment guarantees, so every
++					// field is read with Q_memcpy (no reinterpret_cast UB)
++					if ( pAfterName + sizeof( uint32 ) + sizeof( uint16 ) > pTreeEnd )
+ 					{
+-						sprintf( pszFNameOut + strlen( pszFNameOut )," fnumber=%d ofs=0x%x sz=%d",
+-								 pPart->m_nFileNumber, pPart->m_nFileDataOffset, pPart->m_nFileDataSize );
+-						pPart++;
++						bTreeCorrupt = true;
++						break;
++					}
++					uint32 nFileCRC;
++					uint16 nMetaDataSize;
++					Q_memcpy( &nFileCRC, pAfterName, sizeof( nFileCRC ) );
++					Q_memcpy( &nMetaDataSize, pAfterName + sizeof( uint32 ), sizeof( nMetaDataSize ) );
++					V_snprintf( pszFNameOut, sizeof( pszFNameOut ), "%s%s%s crc=0x%x metadatasz=%d", pszCurDir, pData, pszCurExtension, nFileCRC, nMetaDataSize );
++					// part descriptors until the PACKFILEINDEX_END terminator
++					char const *pPart = pAfterName + sizeof( uint32 ) + sizeof( uint16 );
++					while ( pPart + sizeof( CFilePartDescr ) <= pTreeEnd )
++					{
++						uint16 nFileNumber;
++						Q_memcpy( &nFileNumber, pPart, sizeof( nFileNumber ) );
++						if ( nFileNumber == PACKFILEINDEX_END )
++							break;
++						uint32 nFileDataOffset, nFileDataSize;
++						Q_memcpy( &nFileDataOffset, pPart + sizeof( uint16 ), sizeof( nFileDataOffset ) );
++						Q_memcpy( &nFileDataSize, pPart + sizeof( uint16 ) + sizeof( uint32 ), sizeof( nFileDataSize ) );
++						int nLen = V_strlen( pszFNameOut );
++						if ( (size_t)nLen >= sizeof( pszFNameOut ) )
++							break;
++						V_snprintf( pszFNameOut + nLen, sizeof( pszFNameOut ) - nLen," fnumber=%d ofs=0x%x sz=%d", nFileNumber, nFileDataOffset, nFileDataSize );
++						pPart += sizeof( CFilePartDescr );
+ 					}
+ 				}
+ 				else
+@@ -1769,7 +1868,14 @@ int CPackedStore::GetFileList( const char *pWildCard, CUtlStringList &outFilenam
+  					V_strncat( pszFNameOut, pData, sizeof( pszFNameOut ) );
+  					V_strncat( pszFNameOut, pszCurExtension, sizeof( pszFNameOut ) );
+ 				}
+-				SkipFile( pData );
++
++				char const *pNextEntry = NULL;
++				if ( !VpkSkipEntryBounded( pAfterName, pTreeEnd, &pNextEntry ) )
++				{
++					bTreeCorrupt = true;
++					break;
++				}
++				pData = pNextEntry;
+ 
+ 				bool matches = true;
+ 
+@@ -1797,9 +1903,19 @@ int CPackedStore::GetFileList( const char *pWildCard, CUtlStringList &outFilenam
+ 					outFilenames.AddToTail( pFName );
+ 				}
+ 			}
++			if ( bTreeCorrupt )
++				break;
+ 			pData++;												// skip end marker
+ 		}
+-		pData++;												// skip end marker
++		if ( bTreeCorrupt )
++			break;
++		if ( pData )
++			pData++;												// skip end marker
++	}
++
++	if ( bTreeCorrupt )
++	{
++		Warning( "Corrupt VPK directory tree in '%s' -- file listing truncated\n", m_pszFullPathName );
+ 	}
+ 
+ 	if ( bSortedOutput )
+-- 
+2.47.3
+
