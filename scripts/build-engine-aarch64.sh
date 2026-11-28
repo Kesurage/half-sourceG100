@@ -51,7 +51,7 @@ if [ ! -d "$WORKDIR/android-ndk-r10e" ]; then
       sources/cxx-stl/llvm-libc++ sources/cxx-stl/llvm-libc++abi \
       sources/cxx-stl/stlport sources/cxx-stl/system 2>/dev/null ) || true
 fi
-if [ ! -x "$WORKDIR/llvm16/bin/clang" ]; then
+if [ ! -x "$WORKDIR/llvm16/bin/clang" ] && [ ! -x "$WORKDIR/llvm16/usr/lib/llvm-16/bin/clang" ]; then
   echo "== clang 16.0.6 (Debian pool, no root needed) =="
   mkdir -p "$WORKDIR/llvm16" "$WORKDIR/debs" && cd "$WORKDIR/debs"
   BASE="http://deb.debian.org/debian/pool/main/l/llvm-toolchain-16"
@@ -62,10 +62,15 @@ if [ ! -x "$WORKDIR/llvm16/bin/clang" ]; then
            libllvm16_16.0.6-15~deb12u1_amd64.deb \
            llvm-16_16.0.6-15~deb12u1_amd64.deb \
            llvm-16-linker-tools_16.0.6-15~deb12u1_amd64.deb \
-           libclang-common-16-dev_16.0.6-15~deb12u1_all.deb; do
-    [ -f "$f" ] || curl -sO "$BASE/$f"
+           libclang-common-16-dev_16.0.6-15~deb12u1_all.deb \
+           libz3-4_4.8.12-3.1_amd64.deb \
+           libedit2_3.1-20221030-2_amd64.deb; do
+    [ -f "$f" ] || curl -sfO "$BASE/$f" || curl -sfO "http://deb.debian.org/debian/pool/main/z/z3/$f" || curl -sfO "http://deb.debian.org/debian/pool/main/libe/libedit/$f"
     dpkg -x "$f" "$WORKDIR/llvm16"
   done
+  # Ubuntu 24.04 runners ship z3 with soname libz3.so.4.11 (not libz3.so.4) and
+  # may lack libedit.so.2 — the two debs above land in the same lib dir the
+  # LD_LIBRARY_PATH below already covers, so the toolchain is self-contained.
   cd "$WORKDIR"
 fi
 if [ ! -x "$WORKDIR/ccache-root/usr/bin/ccache" ]; then
@@ -82,6 +87,11 @@ export ANDROID_NDK_HOME="$WORKDIR/android-ndk-r10e"
 export NDK_HOME="$WORKDIR/android-ndk-r10e"
 export PATH="$WORKDIR/ccache-root/usr/bin:$WORKDIR/llvm16/usr/lib/llvm-16/bin:$PATH"
 export LD_LIBRARY_PATH="$WORKDIR/ccache-root/usr/lib/x86_64-linux-gnu:$WORKDIR/llvm16/usr/lib/x86_64-linux-gnu:$WORKDIR/llvm16/usr/lib/llvm-16/lib"
+
+# Fail LOUD and EARLY if the toolchain cannot run on this host (waf would
+# otherwise only say "could not configure a C compiler").
+clang --version >/dev/null 2>&1 || { echo "ERROR: clang from the extracted toolchain does not run on this host" >&2; ldd "$WORKDIR/llvm16/usr/lib/llvm-16/bin/clang-16" 2>/dev/null | grep "not found"; exit 1; }
+ld.lld --version >/dev/null 2>&1 || { echo "ERROR: lld does not run on this host" >&2; exit 1; }
 
 # ---- engine source (pinned commit + our patches) ------------------------------
 if [ ! -d "$ENGINE_DIR" ]; then
