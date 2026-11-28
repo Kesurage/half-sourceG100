@@ -155,7 +155,13 @@ public final class Watchdog {
 
     private static String logcatTail() {
         try {
-            Process p = new ProcessBuilder("logcat", "-d", "-t", String.valueOf(LOGCAT_TAIL_LINES))
+            // v0.6.5: buffers main+system only, pid-filtered to this
+            // process. The old unfiltered tail included the persistent
+            // crash buffer with its immortal (long-fixed) tombstone.
+            Process p = new ProcessBuilder("logcat", "-d", "-v", "time",
+                            "-t", String.valueOf(LOGCAT_TAIL_LINES),
+                            "-b", "main", "-b", "system",
+                            "--pid", String.valueOf(android.os.Process.myPid()))
                     .redirectErrorStream(true)
                     .start();
             java.io.InputStream in = p.getInputStream();

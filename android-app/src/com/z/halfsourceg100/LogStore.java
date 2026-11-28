@@ -29,7 +29,7 @@ import java.util.List;
 public final class LogStore {
 
     private static final String TAG = "half-sourceG100";
-    private static final int MAX_LOGCAT_FILES = 3;
+    private static final int MAX_LOGCAT_FILES = 2;   // v0.6.5: 3 -> 2, each capped 256 KB
     private static final long MAX_TAIL_CHARS = 200_000; // ~200 KB per file shown
 
     private LogStore() {}
@@ -89,6 +89,50 @@ public final class LogStore {
 
     // ------------------------------------------------------ logcat dump ----
 
+    // v0.6.5: the default "logcat -d" dumps the crash buffer too, and the
+    // crash buffer keeps the OLDEST tombstone around for days. Every launch
+    // re-bundled the same long-fixed Nov 27 FORTIFY abort (844 KB per
+    // postmortem, 615 KB per launch logcat) -- pure noise. We now dump only
+    // main+system, filtered to OUR pid where possible, and hard-cap the
+    // captured file.
+    private static final String[] LOGCAT_BUFFERS = {"main", "system"};
+    private static final long MAX_CAPTURE_BYTES = 256 * 1024; // 256 KB hard cap
+
+    /** Run logcat into out with buffers+pid filter; hard-cap the file size. */
+    private static void runLogcat(File out, Integer pid) {
+        try {
+            java.util.List<String> cmd = new java.util.ArrayList<>();
+            cmd.add("logcat"); cmd.add("-d"); cmd.add("-v"); cmd.add("time");
+            for (String b : LOGCAT_BUFFERS) { cmd.add("-b"); cmd.add(b); }
+            if (pid != null) { cmd.add("--pid"); cmd.add(String.valueOf(pid)); }
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            java.io.InputStream in = p.getInputStream();
+            java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
+            byte[] buf = new byte[8192];
+            long written = 0; int n;
+            while ((n = in.read(buf)) > 0) {
+                long room = MAX_CAPTURE_BYTES - written;
+                if (room <= 0) {
+                    // keep the TAIL: restart the file at the last 64 KB
+                    fo.close();
+                    java.io.RandomAccessFile rf = new java.io.RandomAccessFile(out, "rw");
+                    rf.setLength(Math.max(0, rf.length() - 64 * 1024));
+                    rf.close();
+                    fo = new java.io.FileOutputStream(out, true);
+                    written = Math.max(0, MAX_CAPTURE_BYTES - 64 * 1024);
+                    room = 64 * 1024;
+                }
+                int take = (int) Math.min(n, room);
+                fo.write(buf, 0, take);
+                written += take;
+            }
+            fo.close();
+            p.waitFor();
+        } catch (Throwable t) {
+            Log.w(TAG, "logcat run failed: " + t);
+        }
+    }
+
     /**
      * Best-effort "logcat -d" dump at launch time. No READ_LOGS needed for
      * our own app's lines (log tag "half-sourceG100", "SDL", "ActivityTaskManager"
@@ -99,16 +143,7 @@ public final class LogStore {
             try {
                 File dir = logDir(ctx);
                 File out = new File(dir, "logcat-" + System.currentTimeMillis() + ".txt");
-                Process p = new ProcessBuilder("logcat", "-d", "-v", "time")
-                        .redirectErrorStream(true)
-                        .start();
-                java.io.InputStream in = p.getInputStream();
-                java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) fo.write(buf, 0, n);
-                fo.close();
-                p.waitFor();
+                runLogcat(out, android.os.Process.myPid());
                 trimLogcatFiles(dir);
             } catch (Throwable t) {
                 Log.w(TAG, "logcat capture failed: " + t);
@@ -122,25 +157,24 @@ public final class LogStore {
      * its logcat died with it. The kill traces are still in the ring buffer,
      * so dump them now, tagged as post-mortem, before this session's own
      * output buries them.
+     *
+     * v0.6.5: skip when the last launch is older than POSTMORTEM_MAX_AGE_MS
+     * (the old logic kept re-capturing the same ancient kill), and never
+     * dump the crash buffer (immortal tombstones, see LOGCAT_BUFFERS).
      */
+    private static final long POSTMORTEM_MAX_AGE_MS = 6L * 60 * 60 * 1000; // 6 h
+
     public static void capturePostMortem(Context ctx) {
         try {
             File dir = logDir(ctx);
             File marker = new File(dir, "engine-last.txt");
             if (!marker.isFile()) return; // previous run never launched
+            long age = System.currentTimeMillis() - marker.lastModified();
+            if (age > POSTMORTEM_MAX_AGE_MS) return; // stale history, not a fresh kill
             SharedPreferencesEngine.markAppStart(ctx); // this session started
             if (SharedPreferencesEngine.previousRunClean(ctx)) return;
             File out = new File(dir, "postmortem-" + System.currentTimeMillis() + ".txt");
-            Process p = new ProcessBuilder("logcat", "-d", "-v", "time")
-                    .redirectErrorStream(true)
-                    .start();
-            java.io.InputStream in = p.getInputStream();
-            java.io.FileOutputStream fo = new java.io.FileOutputStream(out);
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) fo.write(buf, 0, n);
-            fo.close();
-            p.waitFor();
+            runLogcat(out, null); // pid unknown for the dead run
             trimPostMortemFiles(dir);
             Log.w(TAG, "previous run appears to have been killed — post-mortem "
                     + "logcat captured: " + out.getName());

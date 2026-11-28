@@ -6,8 +6,8 @@
      permission gates fixed (scoped storage / optional mic). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.z.halfsourceg100"
-    android:versionCode="12"
-    android:versionName="0.6.4">
+    android:versionCode="13"
+    android:versionName="0.6.5">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 

@@ -148,23 +148,53 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     // stable window. The gate opens exactly once per activity lifetime;
     // later pause/resume cycles use the normal nativeResume() path.
     // ======================================================================
+    // v0.6.5 (gate v2): the v0.6.4 quiet-window was NOT enough. Field logs
+    // show the engine starting while the window config was still the
+    // portrait one; the rotation then swaps the SurfaceView surface (queue
+    // #1 -> #2) and the engine swaps every frame into the dead window.
+    // The gate now ALSO requires a LANDSCAPE surface (w > h) before the
+    // first engine start. Hard timeout doubled: a device that never
+    // reports landscape (split screen, foldables) still launches.
     protected static boolean mSurfaceStableGateDone = false;
     protected static boolean mSurfaceStablePending = false;
     protected static long mFirstSurfaceReadyAt = 0L;
     protected static long mLastSurfaceEventAt = 0L;
+    protected static int mStableSurfaceW = 0, mStableSurfaceH = 0;
     protected static final long SURFACE_STABLE_QUIET_MS = 700L;
-    protected static final long SURFACE_STABLE_MAX_WAIT_MS = 3500L;
+    protected static final long SURFACE_STABLE_MAX_WAIT_MS = 7000L;
     protected static android.os.Handler mSurfaceStableHandler = null;
+
+    // v0.6.5: the rebind kick. If the surface changes AFTER the engine
+    // started (the rotation settle finishing late, or the system recreating
+    // the SurfaceView), the engine's EGL window surface keeps pointing at
+    // the OLD ANativeWindow: the console advances, menu input and sounds
+    // work, and the compositor reports 'NO_BUFFER_AVAILABLE' forever --
+    // the screen stays black. A nativeResume() is exactly what a real
+    // pause/resume does, and SDL 2.0.17 rebuilds the EGL surface on the
+    // CURRENT window in that path. We fire it once after the new surface
+    // has been quiet for a moment.
+    protected static boolean mRebindKickPending = false;
 
     /** Any surface lifecycle event resets the quiet window. */
     protected static void noteSurfaceEvent() {
         mLastSurfaceEventAt = android.os.SystemClock.uptimeMillis();
     }
 
+    /** Surface dimensions, recorded by surfaceChanged for the gate. */
+    protected static void noteSurfaceSize(int w, int h) {
+        mStableSurfaceW = w;
+        mStableSurfaceH = h;
+    }
+
+    /** True when the current surface is landscape (the engine's only sane orientation). */
+    protected static boolean surfaceIsLandscape() {
+        return mStableSurfaceW > mStableSurfaceH;
+    }
+
     /**
-     * Open the surface-stability gate once the surface has been quiet
-     * (or the hard timeout expired), then re-run the state machine so the
-     * engine thread starts on the FINAL surface.
+     * Open the surface-stability gate once the surface has been quiet AND
+     * landscape (or the hard timeout expired), then re-run the state
+     * machine so the engine thread starts on the FINAL surface.
      */
     protected static void requestStableEngineStart() {
         final long now = android.os.SystemClock.uptimeMillis();
@@ -181,8 +211,12 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
 
         final long quietFor = now - mLastSurfaceEventAt;
         final long waited = now - mFirstSurfaceReadyAt;
-        if (quietFor >= SURFACE_STABLE_QUIET_MS || waited >= SURFACE_STABLE_MAX_WAIT_MS) {
-            Log.v(TAG, "hsg100: surface stable after " + waited + " ms -- starting engine");
+        final boolean quiet = quietFor >= SURFACE_STABLE_QUIET_MS;
+        final boolean landscape = surfaceIsLandscape();
+        if ((quiet && landscape) || waited >= SURFACE_STABLE_MAX_WAIT_MS) {
+            Log.v(TAG, "hsg100: surface stable after " + waited + " ms ("
+                    + mStableSurfaceW + "x" + mStableSurfaceH + ", landscape=" + landscape
+                    + ") -- starting engine");
             mSurfaceStableGateDone = true;
             mSurfaceStablePending = false;
             handleNativeState();
@@ -203,6 +237,41 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
                 requestStableEngineStart();
             }
         }, delay);
+    }
+
+    /**
+     * v0.6.5 rebind kick: called when the surface settles AFTER the engine
+     * already started. One nativeResume() after the quiet window forces SDL
+     * to rebuild the EGL window surface on the current ANativeWindow.
+     */
+    protected static void scheduleRebindKick() {
+        if (!mSurfaceStableGateDone || mSDLThread == null) {
+            return; // engine not started yet -- the gate handles binding
+        }
+        if (mRebindKickPending) {
+            return;
+        }
+        mRebindKickPending = true;
+        Log.v(TAG, "hsg100: surface changed after engine start -- rebind kick armed");
+        if (mSurfaceStableHandler == null) {
+            mSurfaceStableHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+        }
+        mSurfaceStableHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                mRebindKickPending = false;
+                if (mSDLThread == null || mSingleton == null) {
+                    return;
+                }
+                Log.v(TAG, "hsg100: rebind kick -- nativeResume() to rebuild EGL surface");
+                try {
+                    nativeResume();
+                } catch (Throwable t) {
+                    Log.w(TAG, "hsg100: rebind kick failed: " + t);
+                }
+            }
+        }, SURFACE_STABLE_QUIET_MS);
+    }
     }
 
     protected static SDLGenericMotionListener_API12 getMotionListener() {
@@ -1944,6 +2013,11 @@ class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
                                int format, int width, int height) {
         Log.v("SDL", "surfaceChanged()");
         SDLActivity.noteSurfaceEvent();
+        SDLActivity.noteSurfaceSize(width, height);
+        // v0.6.5: if the engine is already running and the surface moved
+        // under it (late rotation settle), fire the rebind kick once the
+        // new surface is quiet. Harmless no-op when sizes did not change.
+        SDLActivity.scheduleRebindKick();
 
         if (SDLActivity.mSingleton == null) {
             return;
