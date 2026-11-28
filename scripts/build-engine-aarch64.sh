@@ -64,13 +64,21 @@ if [ ! -x "$WORKDIR/llvm16/bin/clang" ] && [ ! -x "$WORKDIR/llvm16/usr/lib/llvm-
            llvm-16-linker-tools_16.0.6-15~deb12u1_amd64.deb \
            libclang-common-16-dev_16.0.6-15~deb12u1_all.deb \
            libz3-4_4.8.12-3.1_amd64.deb \
-           libedit2_3.1-20221030-2_amd64.deb; do
-    [ -f "$f" ] || curl -sfO "$BASE/$f" || curl -sfO "http://deb.debian.org/debian/pool/main/z/z3/$f" || curl -sfO "http://deb.debian.org/debian/pool/main/libe/libedit/$f"
+           libedit2_3.1-20221030-2_amd64.deb \
+           libxml2_2.9.14+dfsg-1.3~deb12u6_amd64.deb \
+           libicu72_72.1-3+deb12u1_amd64.deb; do
+    [ -f "$f" ] || curl -sfO "$BASE/$f" \
+      || curl -sfO "http://deb.debian.org/debian/pool/main/z/z3/$f" \
+      || curl -sfO "http://deb.debian.org/debian/pool/main/libe/libedit/$f" \
+      || curl -sfO "http://deb.debian.org/debian/pool/main/libx/libxml2/$f" \
+      || curl -sfO "http://deb.debian.org/debian/pool/main/i/icu/$f"
     dpkg -x "$f" "$WORKDIR/llvm16"
   done
-  # Ubuntu 24.04 runners ship z3 with soname libz3.so.4.11 (not libz3.so.4) and
-  # may lack libedit.so.2 — the two debs above land in the same lib dir the
-  # LD_LIBRARY_PATH below already covers, so the toolchain is self-contained.
+  # Ubuntu 24.04 runners: z3 ships soname libz3.so.4.11 (not .4), and
+  # libedit.so.2 / libxml2.so.2 / libicuuc.so.72 may be absent entirely (and
+  # libxml2 pulls ICU). The debs above land in the lib dir the
+  # LD_LIBRARY_PATH below already covers, so the toolchain is self-contained
+  # on any modern x86_64 host (verified: zero 'not found' in ldd).
   cd "$WORKDIR"
 fi
 if [ ! -x "$WORKDIR/ccache-root/usr/bin/ccache" ]; then
